@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "python3 scripts/hooks/session_start.py",
+        "timeout": 10
+      }
+    ],
+    "PostToolUse": [
+      {
+        "type": "command",
+        "command": "python3 scripts/hooks/post_tool_use.py",
+        "timeout": 180
+      }
+    ]
+  }
+}

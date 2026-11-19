@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f7fb">
+  <title>Caseflow — UI Test Management</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main id="login-screen" class="login-screen">
+    <section class="login-card">
+      <a class="brand brand-dark" href="/" aria-label="Caseflow home">
+        <span class="brand-mark">C</span><span>caseflow<span class="brand-period">.</span></span>
+      </a>
+      <div class="login-copy">
+        <span class="eyebrow">QA workspace</span>
+        <h1>Make every test<br>count.</h1>
+        <p>One place to organize scenarios, run checks, and keep an eye on quality.</p>
+      </div>
+      <form id="login-form" class="login-form">
+        <label for="login-name">Your name</label>
+        <input id="login-name" name="name" autocomplete="name" placeholder="e.g. Alex Morgan" required maxlength="60">
+        <button class="button button-primary button-wide" type="submit">Enter dashboard <span aria-hidden="true">→</span></button>
+        <p class="demo-note"><span class="demo-dot"></span> Demo sign-in — no password or account required</p>
+      </form>
+      <div class="login-foot"><span>CASEFLOW QA</span><span>TEST SMARTER · SHIP CONFIDENTLY</span></div>
+    </section>
+    <aside class="login-art" aria-label="Testing workflow illustration">
+      <div class="art-orb orb-one"></div><div class="art-orb orb-two"></div>
+      <div class="art-copy">
+        <span class="art-tag"><span class="live-dot"></span> YOUR QUALITY HUB</span>
+        <h2>Better coverage.<br><span>Less guesswork.</span></h2>
+        <p>Bring your test cases and execution history into focus.</p>
+      </div>
+      <div class="art-window">
+        <div class="window-head"><div class="window-dots"><i></i><i></i><i></i></div><span>Latest executions</span><span class="window-menu">···</span></div>
+        <div class="window-row"><span class="mini-icon icon-green">✓</span><span>Checkout flow</span><span class="mini-status status-pass">PASSED</span></div>
+        <div class="window-row"><span class="mini-icon icon-amber">↗</span><span>Profile settings</span><span class="mini-status status-running">RUNNING</span></div>
+        <div class="window-row"><span class="mini-icon icon-blue">✓</span><span>Search products</span><span class="mini-status status-pass">PASSED</span></div>
+        <div class="window-progress"><span></span></div>
+      </div>
+      <div class="art-caption">A little more clarity in every release.</div>
+    </aside>
+  </main>
+
+  <div id="app-shell" class="app-shell hidden">
+    <aside class="sidebar">
+      <a class="brand" href="#" data-nav="overview">
+        <span class="brand-mark">C</span><span>caseflow<span class="brand-period">.</span></span>
+      </a>
+      <div class="workspace-label">WORKSPACE</div>
+      <nav class="main-nav" aria-label="Main navigation">
+        <button class="nav-link active" data-nav="overview"><span class="nav-icon">⌂</span> Overview</button>
+        <button class="nav-link" data-nav="cases"><span class="nav-icon">▤</span> Test cases <span id="case-nav-count" class="nav-count">0</span></button>
+        <button class="nav-link" data-nav="reports"><span class="nav-icon">◷</span> Test reports</button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="sidebar-help"><span class="help-icon">?</span><div><strong>Need a hand?</strong><small>Explore the demo dashboard</small></div><span class="help-arrow">↗</span></div>
+        <button id="logout-button" class="profile-button">
+          <span class="avatar">QA</span><span class="profile-copy"><strong id="profile-name">QA Engineer</strong><small>Demo workspace</small></span><span class="profile-menu">···</span>
+        </button>
+        <p class="demo-label">DEMO MODE · DATA SAVED IN THIS BROWSER</p>
+      </div>
+    </aside>
+
+    <section class="main-panel">
+      <header class="topbar">
+        <div class="breadcrumb"><span>Workspace</span><b>/</b><strong id="page-title">Overview</strong></div>
+        <div class="topbar-actions"><span class="topbar-date" id="today-label"></span><span class="topbar-divider"></span><button class="icon-button" aria-label="Notifications">♧<i></i></button><span class="avatar avatar-small">QA</span></div>
+      </header>
+
+      <div class="content">
+        <section id="overview-page" class="page">
+          <div class="page-heading heading-row">
+            <div><span class="eyebrow">YOUR QUALITY AT A GLANCE</span><h1>Good work starts with <span id="greeting-name">you</span>.</h1><p>Here’s what’s happening across your test suite today.</p></div>
+            <button class="button button-primary" data-action="add"><span class="plus">+</span> Add test case</button>
+          </div>
+          <div class="stat-grid">
+            <article class="stat-card"><div class="stat-top"><span>Total test cases</span><span class="stat-icon stat-violet">▤</span></div><strong id="stat-total">0</strong><div class="stat-foot"><span class="stat-note">Across all modules</span></div></article>
+            <article class="stat-card"><div class="stat-top"><span>Pass rate</span><span class="stat-icon stat-mint">✓</span></div><strong id="stat-pass">—</strong><div class="stat-foot"><span id="stat-pass-note" class="stat-note">No runs yet</span></div></article>
+            <article class="stat-card"><div class="stat-top"><span>Recent runs</span><span class="stat-icon stat-sky">◷</span></div><strong id="stat-runs">0</strong><div class="stat-foot"><span class="stat-note">Execution history</span></div></article>
+            <article class="stat-card"><div class="stat-top"><span>Needs attention</span><span class="stat-icon stat-peach">!</span></div><strong id="stat-failed">0</strong><div class="stat-foot"><span class="stat-note">Failed latest result</span></div></article>
+          </div>
+          <section class="panel recent-panel">
+            <div class="panel-heading"><div><h2>Recent test cases</h2><p>Your scenarios, all in one place.</p></div><button class="text-button" data-nav="cases">View all <span>→</span></button></div>
+            <div id="overview-table"></div>
+          </section>
+          <section class="bottom-grid">
+            <article class="panel quick-panel"><div class="panel-heading"><div><h2>Quick start</h2><p>Get your test suite moving.</p></div><span class="quick-spark">✳</span></div><div class="quick-actions"><button data-action="add"><span class="quick-action-icon">＋</span><span><strong>Create a test case</strong><small>Document a new scenario</small></span><b>→</b></button><button data-nav="reports"><span class="quick-action-icon quick-report">◷</span><span><strong>Review test reports</strong><small>See how your tests performed</small></span><b>→</b></button></div></article>
+            <article class="panel info-panel"><div class="info-badge">✦ A NOTE ABOUT THIS DEMO</div><h2>Test execution is simulated.</h2><p>Choose Pass or Fail when creating a case to explore both report outcomes. Your cases and reports are saved in this browser only.</p><button class="text-button" data-nav="cases">Explore test cases <span>→</span></button></article>
+          </section>
+        </section>
+
+        <section id="cases-page" class="page hidden">
+          <div class="page-heading heading-row">
+            <div><span class="eyebrow">TEST LIBRARY</span><h1>Your test cases</h1><p>Keep every scenario clear, organized, and ready to run.</p></div>
+            <button class="button button-primary" data-action="add"><span class="plus">+</span> Add test case</button>
+          </div>
+          <section class="panel table-panel">
+            <div class="panel-heading case-toolbar"><div><h2>All test cases <span id="table-count" class="count-pill">0</span></h2><p>Browse, filter, and run your scenarios.</p></div></div>
+            <div class="filters">
+              <label class="search-box"><span>⌕</span><input id="search-input" type="search" placeholder="Search test cases..." aria-label="Search test cases"><kbd>⌘ K</kbd></label>
+              <select id="module-filter" aria-label="Filter by module"><option value="">All modules</option></select>
+              <select id="priority-filter" aria-label="Filter by priority"><option value="">All priorities</option><option>High</option><option>Medium</option><option>Low</option></select>
+              <select id="status-filter" aria-label="Filter by status"><option value="">All statuses</option><option>Ready</option><option>In Progress</option><option>Passed</option><option>Failed</option></select>
+            </div>
+            <div id="cases-table"></div>
+          </section>
+        </section>
+
+        <section id="reports-page" class="page hidden">
+          <div class="page-heading"><span class="eyebrow">EXECUTION HISTORY</span><h1>Test reports</h1><p>Every run, with the details that matter.</p></div>
+          <section class="panel table-panel">
+            <div class="panel-heading"><div><h2>Recent executions <span id="report-count" class="count-pill">0</span></h2><p>Reports are stored locally in this browser.</p></div></div>
+            <div class="filters report-filters">
+              <label for="report-status-filter">Filter by status</label>
+              <select id="report-status-filter">
+                <option value="All">All</option>
+                <option value="Passed">Passed</option>
+                <option value="Failed">Failed</option>
+              </select>
+              <div class="report-export">
+                <button id="export-reports-button" class="button button-primary report-export-button" type="button" aria-describedby="export-reports-help" disabled>Export CSV</button>
+                <p id="export-reports-help" class="report-export-help">No visible reports to export.</p>
+              </div>
+            </div>
+            <p id="report-announcement" class="visually-hidden" aria-live="polite" aria-atomic="true"></p>
+            <div id="reports-table"></div>
+          </section>
+        </section>
+      </div>
+    </section>
+  </div>
+
+  <dialog id="case-dialog" class="modal" aria-labelledby="case-dialog-title">
+    <form id="case-form" method="dialog">
+      <div class="modal-heading"><div><span class="eyebrow">TEST LIBRARY</span><h2 id="case-dialog-title">Create test case</h2><p>Give your scenario a clear name and expected outcome.</p></div><button type="button" class="modal-close" data-close="case-dialog" aria-label="Close dialog">×</button></div>
+      <div class="form-grid">
+        <label>Test case ID <span>*</span><input id="case-id" name="id" placeholder="e.g. TC-104" required maxlength="40"></label>
+        <label>Test name <span>*</span><input id="case-name" name="name" placeholder="e.g. User can reset password" required maxlength="120"></label>
+        <label>Module <span>*</span><input id="case-module" name="module" placeholder="e.g. Authentication" required maxlength="60"></label>
+        <label>Priority <span>*</span><select id="case-priority" name="priority" required><option value="">Select priority</option><option>High</option><option>Medium</option><option>Low</option></select></label>
+        <label class="full-field">Test steps <span>*</span><textarea id="case-steps" name="steps" placeholder="1. Open the sign-in page&#10;2. Select Forgot password&#10;3. Enter a registered email" rows="4" required maxlength="2000"></textarea></label>
+        <label class="full-field">Expected result <span>*</span><textarea id="case-expected" name="expectedResult" placeholder="A password reset confirmation is displayed." rows="2" required maxlength="1000"></textarea></label>
+        <label>Demo run outcome <select id="case-outcome" name="demoOutcome"><option value="pass">Pass</option><option value="fail">Fail</option></select><small class="field-help">Demo only — the runner does not execute these steps.</small></label>
+      </div>
+      <div id="form-error" class="form-error hidden" role="alert"></div>
+      <div class="modal-actions"><button type="button" class="button button-quiet" data-close="case-dialog">Cancel</button><button class="button button-primary" type="submit"><span id="save-label">Save test case</span></button></div>
+    </form>
+  </dialog>
+
+  <dialog id="report-dialog" class="modal report-modal" aria-labelledby="report-title">
+    <div class="modal-heading"><div><span class="eyebrow">EXECUTION REPORT</span><h2 id="report-title">Run details</h2></div><button type="button" class="modal-close" data-close="report-dialog" aria-label="Close dialog">×</button></div>
+    <div id="report-detail"></div>
+    <div class="modal-actions"><button type="button" class="button button-quiet" data-close="report-dialog">Close report</button></div>
+  </dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>
