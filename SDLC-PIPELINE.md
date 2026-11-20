@@ -2,7 +2,19 @@
 
 This workspace packages the full eight-phase SDLC as Copilot custom agents, prompts, and skills. Start with **SDLC Orchestrator** for a guided cycle, or invoke a phase agent/prompt/skill directly for one stage.
 
-## Run a guided cycle
+## Run in Claude Code
+
+The same eight phases are available as Claude Code subagents (`.claude/agents/sdlc-*.md`) driven by the `/sdlc` command (`.claude/skills/sdlc/SKILL.md`). Each subagent follows the matching skill in `.github/skills/`, so the workflow is defined once.
+
+```bash
+cd ~/capstoneclaudeproject
+git switch main && git pull        # every story starts from an up-to-date main
+claude
+```
+
+Then, inside Claude Code, run `/sdlc` followed by the story text (or a path to a file containing it). Claude pauses for your approval at each gate; the last gate asks "Accept this verification and authorize raising the PR?". Start a new Claude Code session after pulling agent changes so they load.
+
+## Run a guided cycle (Copilot)
 
 1. Open Copilot Chat and select **SDLC Orchestrator**.
 2. Provide a user story or point to its source. For this capstone, the current story is [US-102 in requirements.md](requirements.md).
