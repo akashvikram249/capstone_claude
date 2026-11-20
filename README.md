@@ -35,13 +35,17 @@ mvn exec:java
 
 Open [http://localhost:8080](http://localhost:8080), enter any display name, and start exploring. Override the port with `mvn exec:java -Dexec.args="8090"` or set `PORT`.
 
+Set the simulated test run duration with the `RUN_DURATION_MS` environment variable, in milliseconds. The default is 1400. Valid values are whole numbers from 100 to 10000; surrounding whitespace is ignored, and an unset or blank value uses the default. Any other value stops startup with the error `RUN_DURATION_MS must be a whole number from 100 to 10000.` and a non-zero exit code (2), and the server does not start. Put the variable on the same command line as the launcher, for example `RUN_DURATION_MS=500 mvn exec:java`.
+
+Caution: if you reload or close the page while a run is in progress, that case keeps showing "In Progress" and its Run button stays disabled. This is a known limitation, and longer durations make it easier to hit.
+
 ## Test
 
 ```sh
 mvn test
 ```
 
-The tests cover execution state transitions, server endpoints, validation errors, missing runs, and static page delivery. GitHub Actions runs `mvn verify` for pushes to `main` and pull requests.
+The tests cover execution state transitions, server endpoints, validation errors, missing runs, static page delivery, and run-duration startup configuration. GitHub Actions runs `mvn verify` for pushes to `main` and pull requests.
 
 ## Project guide
 

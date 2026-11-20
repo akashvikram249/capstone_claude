@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.Executors;
@@ -50,7 +51,16 @@ public final class DashboardServer implements AutoCloseable {
     public static void main(String[] args) throws IOException {
         int port = args.length == 0 ? Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"))
                 : Integer.parseInt(args[0]);
-        DashboardServer dashboard = new DashboardServer(port, new ExecutionService());
+        // Validate before constructing DashboardServer: its constructor binds the port.
+        Duration runDuration;
+        try {
+            runDuration = RunDurationConfig.parse(System.getenv("RUN_DURATION_MS"));
+        } catch (IllegalArgumentException error) {
+            System.err.println(error.getMessage());
+            System.exit(2);
+            return;
+        }
+        DashboardServer dashboard = new DashboardServer(port, new ExecutionService(runDuration));
         dashboard.start();
         System.out.println("UI Test Case Dashboard running at http://localhost:" + dashboard.port());
         Runtime.getRuntime().addShutdownHook(new Thread(dashboard::close));
