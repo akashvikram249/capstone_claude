@@ -28,6 +28,19 @@ class RaisePrTest(unittest.TestCase):
             "story/us-103-add-bulk-delete-test-cases",
         )
 
+    def test_choose_branch(self):
+        choose = raise_pr.choose_branch
+        self.assertEqual(choose("US-103", "Bulk delete", "main", "main", None), "story/us-103-bulk-delete")
+        self.assertEqual(choose("US-103", "Bulk delete", "story/us-103-bulk-delete", "main", None),
+                         "story/us-103-bulk-delete")
+        self.assertEqual(choose("US-103", "x", "feature/other", "main", "story/custom"), "story/custom")
+
+    def test_choose_branch_refuses_other_story_branches(self):
+        with self.assertRaises(raise_pr.Fail):
+            raise_pr.choose_branch("US-103", "Bulk delete", "feature/automated-pr-creation", "main", None)
+        with self.assertRaises(raise_pr.Fail):
+            raise_pr.choose_branch("US-104", "Other", "story/us-103-bulk-delete", "main", None)
+
     def test_blocked_files(self):
         for name in (".env", "config/.env.local", "certs/server.pem", "credentials.json"):
             self.assertTrue(raise_pr.BLOCKED_FILE.search(name), name)
