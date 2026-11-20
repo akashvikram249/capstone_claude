@@ -54,6 +54,19 @@ def branch_name(story, title):
     return f"story/{slugify(story, 20)}-{slugify(title)}".rstrip("-")
 
 
+def choose_branch(story, title, current, base, explicit):
+    if explicit:
+        return explicit
+    if current in (base, "HEAD"):
+        return branch_name(story, title)
+    if current.startswith(f"story/{slugify(story, 20)}-"):
+        return current
+    raise Fail(
+        f"on branch '{current}', which is not this story's branch; switch to '{base}' "
+        f"(git switch {base} && git pull) so a new story branch is created, or pass --branch"
+    )
+
+
 def parse_remote(url):
     match = re.match(
         r"^(?:https://(?:[^@/]+@)?github\.com/|git@github\.com:|ssh://git@github\.com/)"
@@ -184,7 +197,12 @@ def main(argv=None):
     owner, repo = parse_remote(git("remote", "get-url", "origin"))
     base = args.base or default_base()
     current = git("rev-parse", "--abbrev-ref", "HEAD")
-    branch = args.branch or (branch_name(args.story, args.title) if current in (base, "HEAD") else current)
+    if current == base:
+        git("fetch", "-q", "origin", base)
+        behind = git("rev-list", "--count", f"{base}..origin/{base}", check=False) or "0"
+        if behind != "0":
+            raise Fail(f"local '{base}' is {behind} commit(s) behind origin/{base}; run 'git pull' first")
+    branch = choose_branch(args.story, args.title, current, base, args.branch)
     if branch == base:
         raise Fail(f"refusing to publish directly from the base branch '{base}'")
 

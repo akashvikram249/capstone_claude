@@ -54,7 +54,7 @@ What it does, in order:
 
 1. Refuses without `--approved`, if the PR body lacks any of the five template sections, or if there is nothing to publish.
 2. Runs `mvn --batch-mode verify`; a failure stops everything.
-3. Creates `story/<id>-<slug>` from the base branch (never publishes from `main`), stages changes, and blocks the commit if it finds credential-like files or secret patterns.
+3. Creates `story/<id>-<slug>` from the base branch (never publishes from `main`), stages changes, and blocks the commit if it finds credential-like files or secret patterns. Start every new story from an up-to-date `main` (`git switch main && git pull`): the script refuses if local `main` is behind `origin/main`, and refuses to run from any other branch than that story's own `story/<id>-...` branch unless you pass `--branch`, so a new story can never land on an earlier story's branch or PR.
 4. Commits as `<story>: <title>`, pushes with `-u` (never force), and opens the PR using, in order: an authenticated `gh` CLI, then `GITHUB_TOKEN`/`GH_TOKEN` via the GitHub API. An already-open PR for the branch is returned instead of duplicated.
 5. Prints `PR_URL=<url>`. If neither credential exists, the branch is still pushed, it exits with code 3, and prints a prefilled compare link; the PR is **not** created and the agent must say so.
 
