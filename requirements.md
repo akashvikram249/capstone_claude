@@ -223,3 +223,78 @@ The pasted acceptance criteria contained duplicates and restarted numbering. Exa
 ### Requirements-phase status
 
 Draft only. The story is documented, but source/output locations and CI invocation are unresolved. Human answers and explicit approval are required before handing this story to architecture.
+
+## US-105: Configure the simulated test run duration
+
+### User story
+
+As a demo presenter, I want to set how long a simulated test run takes when I start the dashboard, so that demos can be fast or slow without changing code.
+
+**Source:** User-provided story, decisions, and acceptance criteria in this chat. No Jira, MCP, Confluence, or other external source was supplied or accessed.
+
+### Context and confirmed decisions
+
+- Current behavior (from code inspection): `ExecutionService()` hard-codes a 1400 ms simulated run duration (`Duration.ofMillis(1400)`); a package-private constructor already accepts a `Duration`. `DashboardServer.main` reads the port from the first command-line argument, or else from the `PORT` environment variable (default 8080), then constructs `ExecutionService` and starts listening. `README.md` documents the port override on the line that follows the "Open http://localhost:8080" instruction.
+- The duration is configured with the environment variable `RUN_DURATION_MS`, in milliseconds.
+- If `RUN_DURATION_MS` is unset or blank, the duration stays 1400 ms (current behavior).
+- A valid value is a whole number from 100 to 10000, inclusive.
+- Any other value (text, decimal, negative, below 100, above 10000) stops startup before the server listens, with the message `RUN_DURATION_MS must be a whole number from 100 to 10000.` and a non-zero exit code. The application must not silently fall back to the default.
+- Existing `PORT` and port-argument behavior does not change.
+- Backend only: no UI, API, or report-format changes, and no new dependencies.
+- Runs remain simulated; this story only changes how long they take.
+
+### Confirmed decisions on edge cases (resolved from the earlier open questions)
+
+1. Surrounding Unicode whitespace around a numeric value is stripped (Java `String.strip()` semantics, which follows `isBlank()`), so `" 500 "` is accepted as 500, and so is a value surrounded by an EM SPACE (U+2003). A non-breaking space (U+00A0) is not whitespace under these semantics and is rejected. A whitespace-only value is blank and uses 1400 ms. (Design-review decision D3: this refines the earlier word "trimmed".)
+2. After stripping, the value must be digits only. `+100` and `0100` are rejected as not whole numbers, and so are decimals, exponent notation, and signs.
+3. A value too large for the integer type, such as `99999999999`, is rejected with the same message as any other invalid value. It must not crash with a `NumberFormatException` or any other unhandled error.
+
+### Functional requirements
+
+#### FR-12: Configure the simulated run duration at startup
+
+At startup, read `RUN_DURATION_MS` from the environment and strip surrounding Unicode whitespace (`String.strip()` semantics). When it is unset or blank (empty or whitespace-only), use 1400 ms. When the stripped value consists of digits only, has no sign and no leading zero, and is a whole number from 100 to 10000 inclusive, use that many milliseconds as the simulated run duration for every run started by that server process. When it is any other value (including signs such as `+100`, leading zeros such as `0100`, decimals, exponent notation, text, and numbers too large for the integer type), print `RUN_DURATION_MS must be a whole number from 100 to 10000.`, exit with a non-zero exit code, and do not begin listening on the port. A started run reports In Progress and then Passed or Failed after the configured duration, as in US-102 FR-4.
+
+### Non-functional requirements
+
+- Validation must complete before the server listens, so an invalid configuration never results in a running server.
+- An invalid value must produce a clear, actionable message and must never be silently replaced by the default.
+- The change must not alter `PORT`/port-argument handling, the run-start and run-status API contract, the browser UI, or the stored/exported report format.
+- No new dependencies; Java 17 and Maven only.
+- Simulated duration is approximate: timing is scheduler-based, so tests should allow reasonable tolerance rather than exact equality.
+
+### Acceptance criteria
+
+- **AC-20 — Default duration:** With `RUN_DURATION_MS` unset or blank, runs take 1400 ms.
+- **AC-21 — Accepted boundaries:** With `RUN_DURATION_MS=100` or `RUN_DURATION_MS=10000`, the value is accepted and used as the run duration. A value with surrounding whitespace, such as `" 500 "`, is stripped and accepted as 500.
+- **AC-22 — Rejected values:** Values outside 100-10000, or that are not whole numbers (for example text, decimals, exponent notation such as `1e3`, signed values such as `+100` or `-5`, leading-zero values such as `0100`, 99, 10001, and values too large for the integer type such as `99999999999`), are rejected with the message `RUN_DURATION_MS must be a whole number from 100 to 10000.` and a non-zero exit code, before the server listens and without falling back to the default.
+- **AC-23 — Configured duration observed:** Starting with `RUN_DURATION_MS=200`, a started run reports In Progress and then Passed or Failed after about 200 ms.
+- **AC-24 — Unit tests:** Unit tests cover the default (unset and blank), both boundaries (100 and 10000), and rejected values.
+- **AC-25 — README:** `README.md` documents `RUN_DURATION_MS` (unit, default, valid range, failure on invalid values) next to the existing `PORT` note, with a concrete example (for example `RUN_DURATION_MS=500 mvn exec:java`), and includes a caution that reloading or closing the page during a run leaves that case showing "In Progress" (known limitation; see Out of scope).
+
+### Assumptions
+
+- Because validation is part of startup, it applies whether the port comes from the command-line argument or from `PORT`; an invalid `RUN_DURATION_MS` stops startup in both cases.
+- "Blank" means an empty string or one containing only whitespace; both behave as unset and use 1400 ms.
+- Settled parsing rules (see "Confirmed decisions on edge cases"): surrounding Unicode whitespace is stripped; the stripped value must be digits only; signs, leading zeros, decimals, exponent notation, text, and values too large for the integer type are rejected with the standard message and no unhandled exception.
+- "Non-zero exit code" is satisfied by any non-zero value; the specific code is a design detail.
+- The message is written to the standard error stream (design may confirm); the requirement is only that it is shown to the person starting the server.
+- The configured value is read once at startup and is not changeable while the server runs.
+- Test cases are expected to use time tolerance for AC-23 since the scheduler is not exact.
+
+### Open questions
+
+None. The three earlier questions (surrounding whitespace, `+100`/`0100`, and values too large for the integer type) are resolved; see "Confirmed decisions on edge cases".
+
+### Out of scope
+
+- UI, API, or report-format changes, and any per-run or per-test-case duration setting.
+- Changing the run outcome logic or making runs execute real browser automation.
+- Changes to `PORT` or the port argument, or adding a command-line argument or config file for duration.
+- Changing the duration while the server is running.
+- New dependencies.
+- Recovering a case left showing "In Progress" after a page reload or close during a run (existing behavior in `app.js`; its exposure grows with longer durations). US-105 makes no UI change; this is documented in the README (AC-25) and recorded as a **follow-up story** to be raised separately.
+
+### Requirements-phase status
+
+Approved by user. The user approved the requirements directly in the working session; this was relayed to the requirements and design-review agents by the coordinating agent (design-review decision D5), so those agents did not receive it first-hand. The design review decisions D1-D5 (see `design-review.md`) are reflected above: Unicode-whitespace stripping instead of "trimmed", and the README example and stale-state caution in AC-25. No open questions remain.

@@ -22,6 +22,8 @@ public final class ExecutionService implements AutoCloseable {
     private static final String FAILURE_DETAILS =
             "Simulated UI assertion failed. Review the test steps and expected result.";
 
+    static final Duration DEFAULT_RUN_DURATION = Duration.ofMillis(1400);
+
     private final Duration runDuration;
     private final ConcurrentMap<String, Run> runs = new ConcurrentHashMap<>();
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(task -> {
@@ -31,7 +33,7 @@ public final class ExecutionService implements AutoCloseable {
     });
 
     public ExecutionService() {
-        this(Duration.ofMillis(1400));
+        this(DEFAULT_RUN_DURATION);
     }
 
     ExecutionService(Duration runDuration) {
@@ -39,6 +41,10 @@ public final class ExecutionService implements AutoCloseable {
             throw new IllegalArgumentException("Run duration cannot be negative.");
         }
         this.runDuration = runDuration;
+    }
+
+    Duration runDuration() {
+        return runDuration;
     }
 
     public RunResult start(String caseId, String title, String outcome) {

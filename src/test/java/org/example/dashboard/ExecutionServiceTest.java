@@ -56,6 +56,41 @@ class ExecutionServiceTest {
     }
 
     @Test
+    void defaultRunDurationIs1400Milliseconds() {
+        try (ExecutionService service = new ExecutionService()) {
+            assertEquals(Duration.ofMillis(1400), service.runDuration());
+        }
+    }
+
+    @Test
+    void parsedRunDurationIsUsedByTheService() {
+        try (ExecutionService service = new ExecutionService(RunDurationConfig.parse("200"))) {
+            assertEquals(Duration.ofMillis(200), service.runDuration());
+        }
+    }
+
+    @Test
+    void configuredDurationIsObservedInTheRun() throws Exception {
+        // 200 ms is an exact lower bound: a scheduled task never fires early. 1000 ms is below the
+        // 1400 ms default, so a service that ignored the setting would fail the upper bound.
+        try (ExecutionService service = new ExecutionService(RunDurationConfig.parse("200"))) {
+            ExecutionService.RunResult started = service.start("TC-3", "Configured duration", "pass");
+            assertEquals("In Progress", started.status());
+
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+            ExecutionService.RunResult result = service.find(started.id());
+            while ("In Progress".equals(result.status()) && System.nanoTime() < deadline) {
+                TimeUnit.MILLISECONDS.sleep(10);
+                result = service.find(started.id());
+            }
+
+            assertEquals("Passed", result.status());
+            assertTrue(result.durationMs() >= 200, "duration was " + result.durationMs());
+            assertTrue(result.durationMs() < 1000, "duration was " + result.durationMs());
+        }
+    }
+
+    @Test
     void unknownRunReturnsNull() {
         try (ExecutionService service = new ExecutionService(Duration.ZERO)) {
             assertNull(service.find("missing"));
