@@ -1,5 +1,9 @@
 # Changelog
 
+## Claude Code SDLC agents
+
+- Add Claude Code subagents for each SDLC phase under `.claude/agents/` and an `/sdlc` orchestrator command under `.claude/skills/sdlc/`, reusing the existing phase skills and the guarded PR script.
+
 ## Automated PR creation
 
 - Let the PR Preparation Agent commit, push, and open the pull request for an approved story through `scripts/pr/raise_pr.py`.
