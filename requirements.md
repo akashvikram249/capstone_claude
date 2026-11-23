@@ -298,3 +298,70 @@ None. The three earlier questions (surrounding whitespace, `+100`/`0100`, and va
 ### Requirements-phase status
 
 Approved by user. The user approved the requirements directly in the working session; this was relayed to the requirements and design-review agents by the coordinating agent (design-review decision D5), so those agents did not receive it first-hand. The design review decisions D1-D5 (see `design-review.md`) are reflected above: Unicode-whitespace stripping instead of "trimmed", and the README example and stale-state caution in AC-25. No open questions remain.
+
+## US-106: Show run statistics from the dashboard server
+
+### User story
+
+As a QA Automation Engineer, I want a `GET /api/stats` endpoint that returns the number of test runs the server has started, so that I can quickly see how many runs are in progress, passed, or failed without opening the dashboard.
+
+**Source:** User-provided story, requirements, and acceptance criteria in this chat. No Jira, MCP, Confluence, or other external source was supplied or accessed.
+
+### Context and confirmed decisions
+
+- Current behavior (from code inspection): `ExecutionService` keeps every started run in an in-memory `ConcurrentMap` keyed by run ID (`runs`), added by `start(...)` when `POST /api/runs` succeeds. A run reports `In Progress` until its scheduled completion, then `Passed` (outcome `pass`) or `Failed` (outcome `fail`). Runs are never removed while the server runs. There is no existing counter or statistics API.
+- `DashboardServer` routes `/api/health`, `/api/runs`, and `/api/runs/{id}`; any other path falls through to the static-file handler. Wrong-method requests are answered by `sendMethodNotAllowed`, which sets the `Allow` header and returns status 405 with the JSON body `{"error":"Use the <METHOD> method for this endpoint."}`. JSON responses are sent as `application/json; charset=utf-8` with `Cache-Control: no-store`.
+- Requests rejected by `POST /api/runs` validation (400) or the size limit (413) never create a run, so they are not "started" runs.
+- The response is exactly the four fields in the story; no extra fields.
+
+### Functional requirements
+
+#### FR-13: Report run statistics
+
+Provide `GET /api/stats`, which responds with HTTP 200 and a JSON body of the form `{"totalRuns":N,"inProgress":N,"passed":N,"failed":N}`, where each `N` is a non-negative integer. `totalRuns` is the number of runs the server process has started through `POST /api/runs`; `inProgress`, `passed`, and `failed` are the numbers of those runs currently with status In Progress, Passed, and Failed respectively, using the same status values that `GET /api/runs/{id}` reports. On a server that has started no runs, all four values are 0. The counts reflect runs as they are started and as they complete, and `totalRuns` equals `inProgress + passed + failed` in every response. Any method other than GET on `/api/stats` returns 405 with an `Allow: GET` header, using the same JSON error format as the existing endpoints. The change is backend-only: it adds no change to the browser UI, browser local storage, or the behavior of `POST /api/runs`.
+
+### Non-functional requirements
+
+- Each response must be internally consistent: the four values come from a single view of the runs so that `totalRuns` equals the sum of the other three even while runs are completing concurrently.
+- The endpoint is read-only: calling it must not start, change, or remove any run.
+- Follow the existing response conventions (JSON content type, `Cache-Control: no-store`, security headers) and existing 405 handling.
+- No new dependencies; Java 17 and Maven only.
+- Counts are held in memory only; no persistence or database.
+
+### Acceptance criteria
+
+- **AC-26 — Stats response:** `GET /api/stats` returns HTTP 200 with a JSON body containing exactly the integer fields `totalRuns`, `inProgress`, `passed`, and `failed`.
+- **AC-27 — Empty state:** On a freshly started server with no runs started, all four values are 0.
+- **AC-28 — Counts after completed runs:** After runs are started through `POST /api/runs` with outcomes `pass` and `fail` and have completed, `passed` equals the number of completed `pass` runs, `failed` equals the number of completed `fail` runs, `inProgress` is 0, and `totalRuns` equals the number of runs started.
+- **AC-29 — In-progress run:** While a started run has not yet completed, `inProgress` counts it and `totalRuns` includes it; after it completes it moves to `passed` or `failed` and `inProgress` decreases accordingly.
+- **AC-30 — Totals invariant:** In every response, `totalRuns` equals `inProgress + passed + failed`. Requests rejected by `POST /api/runs` (400 or 413) do not change any count.
+- **AC-31 — Method not allowed:** A non-GET request to `/api/stats` (for example POST) returns 405 with an `Allow: GET` header and a JSON `error` body, and does not change any count.
+- **AC-32 — Backend only:** No browser UI, local-storage, or `POST /api/runs` behavior changes; existing tests continue to pass.
+- **AC-33 — Unit/integration tests:** JUnit tests cover the empty state, counts after a pass run and a fail run, an in-progress run, and the 405 case.
+- **AC-34 — Build:** `mvn verify` passes.
+- **AC-35 — Documentation:** `README.md` and `CHANGELOG.md` document `GET /api/stats`, including the response shape and that counts are server-wide and reset on restart.
+
+### Assumptions
+
+- Counts are server-wide and held in memory for the lifetime of the server process; they reset to 0 on restart. They are not per browser, per user, or per test case.
+- "Started" means a run accepted by `POST /api/runs` (HTTP 202); it counts toward `totalRuns` immediately and is `inProgress` until it completes.
+- The statistics are derived from the same run states exposed by `GET /api/runs/{id}`, so a run's status in the two endpoints agrees.
+- Because the existing handler matches paths exactly, only `/api/stats` is the endpoint; query strings are ignored as for other endpoints and a trailing-slash variant is not required.
+- Method handling follows existing endpoints: any method other than GET, including HEAD, returns 405 with `Allow: GET`.
+- Timing-based tests (in-progress versus completed) use a tolerance, since completion is scheduler-based, as in US-105.
+
+### Open questions
+
+None. No ambiguity changes behavior, security, or acceptance beyond the assumptions above.
+
+### Out of scope
+
+- Any browser UI, local-storage, or report-format change, including showing stats in the dashboard.
+- Changing `POST /api/runs`, `GET /api/runs/{id}`, run outcome logic, or run duration behavior.
+- Persisting counts across restarts, per-user or per-case statistics, filtering or time windows, and additional response fields.
+- Resetting statistics, pruning old runs, or authentication/authorization for the endpoint.
+- New dependencies.
+
+### Requirements-phase status
+
+Approved by user (as relayed by the coordinating agent).

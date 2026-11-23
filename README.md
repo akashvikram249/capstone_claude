@@ -39,6 +39,17 @@ Set the simulated test run duration with the `RUN_DURATION_MS` environment varia
 
 Caution: if you reload or close the page while a run is in progress, that case keeps showing "In Progress" and its Run button stays disabled. This is a known limitation, and longer durations make it easier to hit.
 
+## Run statistics API
+
+`GET /api/stats` returns how many runs the server has started and their current status:
+
+```sh
+curl http://localhost:8080/api/stats
+{"totalRuns":3,"inProgress":1,"passed":1,"failed":1}
+```
+
+The body always has exactly these four integer fields, in this order, and `totalRuns` equals `inProgress + passed + failed`. Counts are server-wide (not per browser, user, or case) and held in memory only, so they reset to 0 when the server restarts. Only runs accepted by `POST /api/runs` (HTTP 202) are counted; requests rejected with 400 or 413 are not. Any method other than GET returns 405 with an `Allow: GET` header.
+
 ## Test
 
 ```sh

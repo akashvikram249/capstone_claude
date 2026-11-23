@@ -19,6 +19,12 @@ public final class ExecutionService implements AutoCloseable {
             String timestamp,
             String failureDetails) {}
 
+    public record RunStats(long inProgress, long passed, long failed) {
+        public long totalRuns() {
+            return inProgress + passed + failed;
+        }
+    }
+
     private static final String FAILURE_DETAILS =
             "Simulated UI assertion failed. Review the test steps and expected result.";
 
@@ -67,6 +73,20 @@ public final class ExecutionService implements AutoCloseable {
         return run == null ? null : run.toResult();
     }
 
+    public RunStats stats() {
+        long inProgress = 0;
+        long passed = 0;
+        long failed = 0;
+        for (Run run : runs.values()) {
+            switch (Run.statusOf(run.completedAtNanos, run.outcome)) {
+                case "Passed" -> passed++;
+                case "Failed" -> failed++;
+                default -> inProgress++;
+            }
+        }
+        return new RunStats(inProgress, passed, failed);
+    }
+
     private static String requireText(String value, String label, int maxLength) {
         if (value == null || value.isBlank()) {
             throw new IllegalArgumentException(label + " is required.");
@@ -101,11 +121,18 @@ public final class ExecutionService implements AutoCloseable {
             this.startedAtNanos = startedAtNanos;
         }
 
+        private static String statusOf(long endNanos, String outcome) {
+            if (endNanos == 0) {
+                return "In Progress";
+            }
+            return "pass".equals(outcome) ? "Passed" : "Failed";
+        }
+
         private RunResult toResult() {
             long endNanos = completedAtNanos;
             boolean complete = endNanos != 0;
             long duration = TimeUnit.NANOSECONDS.toMillis((complete ? endNanos : System.nanoTime()) - startedAtNanos);
-            String status = complete ? ("pass".equals(outcome) ? "Passed" : "Failed") : "In Progress";
+            String status = statusOf(endNanos, outcome);
             return new RunResult(
                     id,
                     caseId,

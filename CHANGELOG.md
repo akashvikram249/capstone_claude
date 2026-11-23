@@ -1,5 +1,10 @@
 # Changelog
 
+## US-106 run statistics endpoint
+
+- Add `GET /api/stats`, which returns `{"totalRuns":N,"inProgress":N,"passed":N,"failed":N}` for the runs the server has started; `totalRuns` always equals the sum of the other three.
+- Counts are server-wide and held in memory, include only runs accepted by `POST /api/runs` (202), and reset when the server restarts; other methods return 405 with `Allow: GET`.
+
 ## US-105 configurable run duration
 
 - Let `RUN_DURATION_MS` (100 to 10000 ms, default 1400) set the simulated test run duration at startup; an invalid value prints an error to stderr and exits with code 2 before the server binds its port.

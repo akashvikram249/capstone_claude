@@ -167,6 +167,7 @@ The serializer is deterministic for a given ordered report projection. Verify it
 - `GET /api/health` — returns server status.
 - `POST /api/runs` — form-encoded case ID, title, and requested demo outcome; creates a run and returns its ID.
 - `GET /api/runs/{id}` — returns In Progress or the final Passed/Failed status, duration, timestamp, and failure message.
+- `GET /api/stats` — returns server-wide counts of started runs: `{"totalRuns":N,"inProgress":N,"passed":N,"failed":N}` (US-106).
 
 ## Security and operational boundaries
 
@@ -418,3 +419,137 @@ Run `mvn test` for Java regressions. No browser-side change exists, so no browse
 - **Out of scope:** UI, API, report-format, per-run or per-case duration, a CLI argument or config file for duration, runtime changes, real browser automation, stale "In Progress" recovery, and new dependencies. The only requirement wording change is "stripped" instead of "trimmed" (decision D3), plus the README example and caution in AC-25.
 
 **Approval status:** Approved by user. The user approved this architecture directly in the working session; this was relayed to the design-review agent by the coordinating agent, so that agent did not receive it first-hand. Design review decisions D1-D5 (see `design-review.md`) are reflected in this section: the `runDuration()` accessor and corrected AC-23 test (D1), two subprocess startup tests (D2), `strip()` with EM SPACE and NBSP cases (D3), the README caution and follow-up story (D4).
+
+## US-106: Show run statistics from the dashboard server
+
+**Source and approval:** Based on the human-approved US-106 section of `requirements.md` (FR-13, AC-26 through AC-35; the section's "Draft" status line has not been edited by this phase and should be read as approved). Source is the user-provided chat story; no Jira/MCP retrieval is claimed. This is a backend-only, read-only addition: no browser UI, local storage, `POST /api/runs`, `GET /api/runs/{id}`, run-outcome, or run-duration change, and no new dependency. Code facts come from inspecting `DashboardServer.java`, `ExecutionService.java`, `DashboardServerTest.java`, `ExecutionServiceTest.java`, `README.md`, and `CHANGELOG.md`.
+
+### Current state and key constraint
+
+`ExecutionService` stores every accepted run in `ConcurrentMap<String, Run> runs`; `start(...)` validates, then `runs.put(...)`, then schedules a task that sets the `volatile long completedAtNanos` (0 means not complete). `Run.toResult()` reads that volatile once and derives status: incomplete is `In Progress`; complete is `Passed` when the outcome is `pass`, otherwise `Failed`. Runs are never removed, and rejected requests (400/413) throw before `runs.put`, so `runs` already contains exactly the "started" runs the story defines. `DashboardServer.handle` routes by exact `path.equals(...)` for `/api/health` and `/api/runs`, then `startsWith("/api/runs/")`, then falls through to `serveStatic`.
+
+The key constraint is consistency under concurrency (NFR). A run can move from In Progress to Passed/Failed between any two reads. Counting in separate passes (for example one stream for `inProgress`, one for `passed`, a third for `failed`, or `runs.size()` for `totalRuns`) can observe different states of the same run, or a different set of runs, and so violate `totalRuns == inProgress + passed + failed` (AC-30). Per-status atomic counters have the same flaw unless guarded by a lock that would also have to wrap `start` and the completion task.
+
+```mermaid
+flowchart LR
+    Client[curl / browser / test] -->|GET /api/stats| Route[DashboardServer.handle: path.equals /api/stats]
+    Route -->|not GET| NA[sendMethodNotAllowed GET: 405 + Allow: GET + JSON error]
+    Route -->|GET| H[handleGetStats]
+    H -->|stats| ES[ExecutionService.stats]
+    ES -->|single pass over runs.values, volatile read once per run| Runs[(runs ConcurrentMap)]
+    ES -->|RunStats inProgress, passed, failed| H
+    H -->|jsonStats, sendJson 200| Client
+    Sched[Scheduler completion task] -.->|sets completedAtNanos| Runs
+    Post[POST /api/runs 202] -.->|runs.put| Runs
+```
+
+### Components touched
+
+| Component | US-106 responsibility |
+|---|---|
+| `ExecutionService` | Add a public nested immutable record `RunStats(long inProgress, long passed, long failed)` with a derived method `long totalRuns()` returning the sum, and a public method `RunStats stats()` that computes the counts in one pass (below). Mapping `completedAtNanos` and `outcome` to a status is extracted into one private `Run` helper used by both `toResult()` and `stats()`, so the two endpoints cannot disagree. The helper must take the already-read `completedAtNanos` value (and the outcome) as a parameter, for example a `private static String statusOf(long endNanos, String outcome)`, and must not re-read the volatile field: `toResult()` must keep a single volatile read feeding status, duration, and failure details, and `stats()` a single read per run. This is a behavior-preserving refactor of `toResult()`. Calling `run.toResult().status()` from `stats()` was considered and not chosen (approved decision); it would also format `startedAt.toString()` and call `System.nanoTime()` for every run on every request. No new fields, counters, or locks. |
+| `DashboardServer` | In `handle`, add `if (path.equals("/api/stats")) { handleGetStats(exchange); return; }` after the `/api/health` branch and before `serveStatic`. Add `handleGetStats` (method check then `sendJson(exchange, 200, jsonStats(executionService.stats()))`) and a `jsonStats` renderer. No change to `send`, `sendJson`, `sendMethodNotAllowed`, `quote`, or the catch blocks. |
+| `README.md` | Add a short API note (the README currently lists no endpoints): `GET /api/stats`, the exact response shape, that counts are server-wide, in memory, count only 202-accepted runs, and reset on restart (AC-35). |
+| `CHANGELOG.md` | Add a US-106 entry at the top in the existing `## US-105 ...` heading style with the same facts (AC-35). |
+| `architecture.md` API list | One bullet for `GET /api/stats` (added above). |
+| `src/test/java` | New tests in `ExecutionServiceTest` and `DashboardServerTest` (strategy below). Existing tests are not modified (AC-32). |
+
+### Interface
+
+**Java:** `public RunStats ExecutionService.stats()`. The record deliberately stores only three counts and derives `totalRuns()`, so the invariant `totalRuns == inProgress + passed + failed` is structural: it cannot be violated by any code path, rather than relying on a test. `long` is used so no overflow reasoning is needed; counts are never negative.
+
+**HTTP:** `GET /api/stats` returns 200, `Content-Type: application/json; charset=utf-8`, `Cache-Control: no-store`, and the existing `X-Content-Type-Options` and `Content-Security-Policy` headers (all applied by the existing `sendJson` and `send`). The body is rendered by string concatenation, as `jsonRun` does, in a fixed field order and with no whitespace:
+
+```
+{"totalRuns":N,"inProgress":N,"passed":N,"failed":N}
+```
+
+All four values are unquoted JSON integers, and there are no extra fields. Because the renderer only emits numbers, it needs no escaping and handles no user text. Any method other than GET (POST, PUT, DELETE, PATCH, and HEAD) goes through `sendMethodNotAllowed(exchange, "GET")`: 405, `Allow: GET`, and body `{"error":"Use the GET method for this endpoint."}`, matching `/api/health` and `/api/runs/{id}`.
+
+### Single consistent snapshot
+
+`stats()` iterates `runs.values()` exactly once. For each run it reads `completedAtNanos` into a local exactly once, classifies the run from that local value as exactly one of in progress, passed, or failed, and increments one local counter. The three local counts are returned in the record, and `totalRuns()` is their sum.
+
+Why this meets the NFR without locking:
+
+- Each run is read once, so it is counted in exactly one bucket. The volatile read is the single linearization point for that run: a run completing mid-scan lands in either In Progress or its final state, never both and never neither.
+- `ConcurrentHashMap` iterators are weakly consistent: a run inserted during the scan may or may not be seen. That is acceptable because `totalRuns` is the sum of what was classified in this pass, not an independent `runs.size()` read. The response therefore always describes one internally consistent set of runs.
+- Each response is a valid point-in-time-per-run view, not a global atomic snapshot of the whole map. Counts are monotonic across successive responses for `passed` and `failed` (a completed run stays completed), and `totalRuns` never decreases (runs are never removed). A strictly atomic global snapshot would need a lock around `start` and the completion task; that is not required by the approved NFR and is rejected as added contention for no observable benefit.
+- A run inserted into `runs` before its completion task is scheduled is simply In Progress, which is correct and matches `GET /api/runs/{id}`.
+- Agreement with `GET /api/runs/{id}` (assumption) follows because both use the same `runs` map, the same `completedAtNanos` sentinel, and the single shared status-mapping helper.
+
+**Alternatives considered:** (1) Atomic counters incremented in `start` and the completion task: O(1) reads, but three counters are not read atomically, a second source of truth must stay in step with `runs`, and a lock would be needed. Rejected. (2) Separate stream passes per status: the specific inconsistency the NFR forbids. Rejected. (3) A single pass over `runs`: chosen. Cost is O(n) per request, where n is the number of runs started since boot; runs are never pruned (an existing, documented limitation), so this suits the demo. If run volume grew, counters under a lock or pruning would be a later, separate story.
+
+### Data flow
+
+1. A client sends `GET /api/stats`; `handle` takes `getPath()`, so a query string such as `?x=1` is ignored.
+2. `path.equals("/api/stats")` matches before `serveStatic`, so the path never reaches the static-file map and its `Not found` 404.
+3. A non-GET method gets the shared 405 response and calls no `ExecutionService` method, so counts cannot change (AC-31).
+4. For GET, `ExecutionService.stats()` does the single pass above; no run is created, modified, or removed.
+5. `jsonStats` renders the record and `sendJson` sends 200 with the standard headers.
+
+Routing details: matching is exact (`/api/stats`). `/api/stats/` and `/api/stats/x` are not routed and fall to the existing static handler's plain-text 404, which the requirements accept (no trailing-slash variant required). The new branch is placed beside `/api/health`, not after `startsWith("/api/runs/")`, so it cannot be shadowed.
+
+### Error handling, security, and operational boundaries
+
+- Errors: 405 reuses `sendMethodNotAllowed`. `stats()` performs no parsing, allocation of unbounded data, or I/O, so there is no new client-input failure mode; an unexpected runtime exception is covered by the existing catch-all in `handle` (500 with the generic JSON message, class name only logged). There is no 400/404 path for this endpoint.
+- Read-only and idempotent: GET changes nothing, so it is safe to poll and cannot be used to start or cancel runs.
+- Information exposure: the response contains four counts only. It does not expose run IDs, case IDs, titles, timestamps, or failure details. The endpoint has no authentication, like the other endpoints and per the out-of-scope list; it reveals only aggregate activity volume of a local demo server and is not a protection boundary. Counts are server-wide, not per user, browser, or case.
+- Headers and CSP: no new header logic. `sendJson` supplies `Cache-Control: no-store` (so a polled count is not served stale from a cache), and `send` supplies `nosniff` and the existing CSP. The response is JSON, never rendered as HTML, and no browser code consumes it, so the CSP `connect-src 'self'` needs no change.
+- State: in memory only; reset on restart; no persistence, files, network calls, or secrets.
+
+### Testability
+
+All timing control uses the existing package-private `ExecutionService(Duration)` constructor, so no new test seam is needed. Tests close services with try-with-resources as existing tests do; `close()` calls `shutdownNow()`, which cancels pending completion tasks.
+
+**`ExecutionServiceTest` (unit):**
+
+- Empty state: a new service's `stats()` is `0/0/0` with `totalRuns()` 0 (AC-27).
+- Deterministic in-progress run: construct with `Duration.ofSeconds(10)` (a duration that cannot elapse during the test), start one run, assert `inProgress` 1, `passed` 0, `failed` 0, `totalRuns()` 1. No sleep, no timing tolerance (AC-29, first half).
+- Completed pass and fail: construct with a short duration (for example 20-50 ms), start one `pass` and one `fail` run, poll `stats()` every ~10 ms with a generous deadline (for example 3 s) until `inProgress == 0`, then assert `passed` 1, `failed` 1, `totalRuns()` 2 (AC-28). Polling avoids the fixed-sleep flakiness of the older tests.
+- Transition: with a moderate duration (for example 300 ms), assert In Progress immediately after `start`; because this half depends on the test not stalling, make it conditional on measured elapsed time well under the duration (as in US-105), then poll to completion and assert the run moved to `passed` or `failed` and `inProgress` is 0 (AC-29, second half).
+- Rejected starts do not count: call `start` with a blank case ID, an over-long title, and outcome `maybe` (each throws `IllegalArgumentException`) and assert `stats()` stays at 0 (AC-30).
+- Agreement with `find`: after completion, `find(id).status()` matches the bucket that `stats()` incremented.
+- Concurrency sanity: start a batch of short runs (for example 50 with 20 ms duration), and while they complete call `stats()` repeatedly from the test thread, asserting the three counts are non-negative, `passed` and `failed` never decrease between successive calls, and `totalRuns()` never decreases; end state is `inProgress` 0 and `totalRuns()` equal to the batch size. The sum invariant itself holds by construction of the record.
+
+**`DashboardServerTest` (HTTP, real server on port 0, existing `get` helper pattern):**
+
+- `GET /api/stats` on a fresh server: status 200 and the exact body `{"totalRuns":0,"inProgress":0,"passed":0,"failed":0}`; assert `Content-Type` starts with `application/json`, `Cache-Control` is `no-store`, `X-Content-Type-Options` is `nosniff`, and the CSP header is present (AC-26, AC-27).
+- Counts after runs: POST one `pass` and one `fail` run with a short duration, poll `GET /api/stats` until `inProgress` is 0 (deadline), assert the exact body with `totalRuns:2,passed:1,failed:1`; also assert each run's `/api/runs/{id}` status matches (AC-28).
+- In progress over HTTP: a server built on `ExecutionService(Duration.ofSeconds(10))`, POST one run, GET stats shows `inProgress:1`, `totalRuns:1` (AC-29).
+- Rejected POSTs: send a 400 case (bad outcome) and a 413 case (body over 4096 bytes) and assert the stats body is unchanged (AC-30).
+- 405: `POST`, `PUT`, `DELETE`, and `HEAD` to `/api/stats` each return 405 with `Allow: GET`; for the non-HEAD methods the body is JSON containing `"error"`; after the POST attempt a following GET shows the same counts, proving no run was created (AC-31). For HEAD, assert status and `Allow` only, since the JDK server's handling of a body on a HEAD response is existing, unchanged behavior shared with `/api/health`.
+- Routing: `GET /api/stats?x=1` returns 200 stats; `GET /api/stats/` returns the existing 404.
+- Existing tests continue unmodified and passing; run `mvn verify` (AC-32, AC-34). No browser test is needed because there is no UI change.
+
+No tests have been run in this architecture phase.
+
+### Acceptance-criteria trace
+
+| Criterion | Architectural path |
+|---|---|
+| AC-26 | `handleGetStats` returns 200 and `jsonStats` emits exactly the four integer fields in fixed order. HTTP test asserts the exact body and headers. |
+| AC-27 | Empty `runs` gives an all-zero record and body; unit and HTTP tests on a fresh service/server. |
+| AC-28 | `stats()` classifies completed runs by outcome using the same status mapping as `find`; polled unit and HTTP tests assert passed, failed, inProgress 0, total equals runs started. |
+| AC-29 | Runs enter `runs` as In Progress and are counted in `inProgress` and `totalRuns` until `completedAtNanos` is set; a 10-second-duration service tests this deterministically, and a moderate-duration test with a tolerance guard covers the transition. |
+| AC-30 | `totalRuns()` is derived as the sum, so the invariant is structural; rejected 400/413 requests never reach `runs.put`, verified by unit and HTTP tests. |
+| AC-31 | `sendMethodNotAllowed(exchange, "GET")` before any service call; HTTP tests cover POST, PUT, DELETE, HEAD and unchanged counts. |
+| AC-32 | Only additive changes to `handle` and `ExecutionService` (plus the behavior-preserving status-helper extraction); no UI, storage, or `POST /api/runs` edits; existing tests unmodified. |
+| AC-33 | The unit and HTTP tests above cover the empty state, pass, fail, in-progress, and 405 cases. |
+| AC-34 | `mvn verify` runs the added tests with no new dependency. |
+| AC-35 | README API note and CHANGELOG entry state the shape, server-wide scope, 202-only counting, and reset on restart. |
+
+### Assumptions, trade-offs, risks, and scope
+
+- **Single pass over the map versus counters:** chosen for correctness and a single source of truth over O(1) reads. Risk: cost grows linearly with started runs, which are never pruned. Acceptable for a local demo; documented, not mitigated here.
+- **Weakly consistent iteration:** the response is consistent with itself, but not an atomic global snapshot; a run started during the scan may be absent from that response. This satisfies the NFR as written (the total equals the sum) and is noted for review.
+- **Shared status helper:** removes the chance that stats and `GET /api/runs/{id}` disagree about a run. The small refactor touches `Run.toResult()`; its existing tests (`ExecutionServiceTest`, `DashboardServerTest`) guard against regression, and the `toResult().status()` alternative avoids any change to existing code.
+- **Existing sentinel:** completion is signalled by `completedAtNanos != 0`, as today. `System.nanoTime()` may in principle return 0 or negative values; this is pre-existing and not changed here, and stats inherit exactly the same classification as `GET /api/runs/{id}`.
+- **Timing tests:** the only timing-sensitive assertions use polling with a deadline, a 10-second duration for deterministic In Progress, and an elapsed-time guard for the transition check; no exact-equality timing assertion is used.
+- **HEAD:** treated as 405 per the requirements, even though HEAD is conventionally permitted alongside GET; consistent with existing endpoints.
+- **Unauthenticated endpoint:** consistent with the project's demo posture; aggregate counts only.
+- **In scope:** `ExecutionService.stats()` and `RunStats`, the `/api/stats` route, handler, and JSON rendering, tests, README, CHANGELOG, and the API bullet in this document.
+- **Out of scope:** browser UI or showing stats in the dashboard, local storage or report-format changes, changes to `POST /api/runs`, `GET /api/runs/{id}`, outcome or duration behavior, persistence across restarts, per-user or per-case statistics, filtering or time windows, extra response fields, reset or pruning, authentication, a trailing-slash route, and new dependencies.
+- **Open questions:** none beyond the approved assumptions.
+
+**Approval request:** Please review the US-106 architecture, in particular the single-pass snapshot design, the derived `totalRuns()` record, and the shared status helper (versus calling `toResult().status()`). Design review completed and agreed by the human (findings F1 applied; Low findings accepted as test-writing notes).
