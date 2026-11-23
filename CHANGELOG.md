@@ -1,5 +1,9 @@
 # Changelog
 
+## US-105 configurable run duration
+
+- Let `RUN_DURATION_MS` (100 to 10000 ms, default 1400) set the simulated test run duration at startup; an invalid value prints an error to stderr and exits with code 2 before the server binds its port.
+
 ## Claude Code SDLC agents
 
 - Add Claude Code subagents for each SDLC phase under `.claude/agents/` and an `/sdlc` orchestrator command under `.claude/skills/sdlc/`, reusing the existing phase skills and the guarded PR script.

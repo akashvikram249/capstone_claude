@@ -269,3 +269,152 @@ The final item directly verifies the DOCSYNC-AC-06 boundary in addition to the f
 - **Unresolved before implementation:** confirm authoritative source path/definition and version, reference destination and format, and whether the proposed Maven `verify` integration/command is desired. “Go forward” authorizes this architecture draft with assumptions; it does not resolve these decisions or establish Jira/MCP provenance.
 
 **Approval request:** Please review the DOCSYNC-1 architecture and confirm or revise the proposed source/output paths, Markdown format, and read-only Maven `verify` integration. I am pausing here for human approval; design review has not started.
+
+## US-105: Configure the simulated test run duration
+
+**Source and approval:** Based on the user-approved US-105 section of `requirements.md` (FR-12, AC-20 through AC-25). This is a backend startup-configuration change only. It does not change the browser UI, `/api/health`, `/api/runs`, `/api/runs/{id}`, the report format, `PORT`/port-argument handling, or the simulated nature of runs, and it adds no dependency. Code facts below come from inspecting `DashboardServer.java`, `ExecutionService.java`, `ExecutionServiceTest.java`, and `README.md`.
+
+### Current state and key constraint
+
+`DashboardServer.main` parses the port (argument 0, else `PORT`, default 8080), then runs `new DashboardServer(port, new ExecutionService())` and `start()`. `ExecutionService()` hard-codes `Duration.ofMillis(1400)`, and a package-private `ExecutionService(Duration)` constructor already exists and is used by tests. Note that the `DashboardServer` constructor calls `HttpServer.create(new InetSocketAddress(port), 0)`, which binds the port, not just `start()`. "Before the server listens" therefore means validation must run **before `new DashboardServer(...)`**, not merely before `start()`.
+
+```mermaid
+flowchart LR
+    Env[RUN_DURATION_MS env var] -->|raw String or null| Parser[RunDurationConfig.parse]
+    Parser -->|valid or unset/blank: Duration| Main[DashboardServer.main]
+    Parser -->|invalid: IllegalArgumentException with standard message| Main
+    Main -->|invalid| Stderr[System.err message, System.exit 2, no server created]
+    Main -->|valid| Exec[new ExecutionService Duration]
+    Exec --> Server[new DashboardServer, start]
+    Server -->|POST /api/runs| Sched[scheduler.schedule after runDuration]
+    Sched -->|GET /api/runs/id| Status[In Progress, then Passed/Failed]
+```
+
+### Components touched
+
+| Component | US-105 responsibility |
+|---|---|
+| `RunDurationConfig` (new, package-private final class in `org.example.dashboard`) | Pure parsing and validation. Exposes `static Duration parse(String raw)` and the constant message `RUN_DURATION_MS must be a whole number from 100 to 10000.` It does not read the environment, print, or exit, so unit tests need no server and no `System.exit`. |
+| `ExecutionService` | Unchanged run logic. Introduce a package-private `static final Duration DEFAULT_RUN_DURATION = Duration.ofMillis(1400)` and have the public no-arg constructor delegate to it, so 1400 has a single source of truth shared with the parser. The existing package-private `ExecutionService(Duration)` constructor is the injection point; it is reachable from `DashboardServer.main` because both classes share the package, so it need not become public. Add a package-private read-only accessor `Duration runDuration()` (design-review decision D1) so tests can assert the AC-20 default, the no-arg-constructor delegation, and the parsed value deterministically; it has no effect on run behavior. |
+| `DashboardServer.main` | Only place that reads `System.getenv("RUN_DURATION_MS")`, calls the parser, and on failure writes to stderr and exits. Passes the resulting `Duration` to `new ExecutionService(duration)`. The `DashboardServer` constructor, `start()`, handlers, and API are untouched. |
+| `README.md` | Add a `RUN_DURATION_MS` note directly beside the existing `PORT` sentence (line 36): unit (ms), default 1400, valid range 100-10000 whole numbers, that an invalid value stops startup with an error, a concrete example such as `RUN_DURATION_MS=500 mvn exec:java`, and a caution that reloading or closing the page during a run leaves that case showing "In Progress" (existing behavior, made more likely by longer durations; recovery is a separate follow-up story, decision D4) (AC-25). |
+| `src/test/java` | New `RunDurationConfigTest`; additions to `ExecutionServiceTest`; new `StartupConfigurationTest` holding the two subprocess startup tests (decision D2, below). |
+
+### Parsing and validation unit (`RunDurationConfig.parse`)
+
+Input is `String raw` (possibly `null`). Output is a `Duration` or an `IllegalArgumentException` whose message is exactly the standard message. Rules, applied in order:
+
+1. `null` returns `DEFAULT_RUN_DURATION`.
+2. `s = raw.strip()`. If `s` is empty (so empty and whitespace-only inputs) return `DEFAULT_RUN_DURATION`. `strip()` is used rather than `trim()` so "blank" matches `String.isBlank()` Unicode whitespace semantics (confirmed decision D3; the requirements now say "stripped"). A value surrounded by an EM SPACE (U+2003) is accepted; a non-breaking space (U+00A0) is not whitespace under `strip()`, so it remains and causes rejection, as does a zero-width space.
+3. Reject unless `s.length()` is 3 to 5 and every character is an ASCII digit `'0'..'9'`. Do not use `Character.isDigit`, which accepts non-ASCII Unicode digits that `Integer.parseInt` would also accept. This rejects signs, decimals, `1e3`, text, and embedded whitespace.
+4. Reject if `s.charAt(0) == '0'` (leading zeros such as `0100`). With no leading zero, a 3-digit value is automatically at least 100.
+5. `Integer.parseInt(s)` is now provably safe: at most 5 ASCII digits cannot overflow `int`, so no `NumberFormatException` can occur. Values such as `99999999999` fail at the length check and never reach parsing. Reject if the value is greater than 10000.
+6. Return `Duration.ofMillis(value)`.
+
+All rejection paths throw the same exception type and the same message; the invalid input is deliberately not echoed. The method has no side effects and no timing dependence, so it is fully deterministic.
+
+### Where validation and exit happen, and how the error reaches stderr
+
+In `main`, after the existing (unchanged) port parse and before any `DashboardServer` or `ExecutionService` is constructed:
+
+```
+Duration runDuration;
+try {
+    runDuration = RunDurationConfig.parse(System.getenv("RUN_DURATION_MS"));
+} catch (IllegalArgumentException error) {
+    System.err.println(error.getMessage());
+    System.exit(2);
+    return;
+}
+```
+
+- The message goes to `System.err` through `println`, satisfying the "shown to the person starting the server" assumption and keeping stdout for the existing "running at" line. The catch wraps only the parser call, so unrelated failures are not mislabeled.
+- Exit code 2 is a design choice (any non-zero value satisfies AC-22). It differs from the JVM's code 1 for an uncaught exception, so a configuration error is distinguishable.
+- `System.exit` appears only in `main`. At that point nothing has been bound or scheduled: no `HttpServer`, no `ExecutionService` scheduler thread, and no shutdown hook, so exit is clean and the server never listens.
+- Because the check sits after port selection, it applies identically whether the port came from the CLI argument or `PORT` (the earlier assumption). Existing port parsing is left exactly as is, including its current behavior on a malformed port. Only the numeric parse of the port (`Integer.parseInt`) precedes duration validation: if the port is non-numeric and `RUN_DURATION_MS` is also invalid, the existing port `NumberFormatException` happens first. An out-of-range port (`new InetSocketAddress`) or an in-use port (`HttpServer.create`) fails inside `new DashboardServer(...)`, after duration validation, so an invalid duration is reported first in those cases (and the subprocess ordering test below relies on this). This ordering keeps port behavior unchanged and is recorded as a decision.
+- The value is read once at startup and the `Duration` is stored in the final field `ExecutionService.runDuration`, so it cannot change while the server runs.
+
+### Data flow
+
+1. The operator starts the JVM, optionally with `RUN_DURATION_MS` set (and a port argument or `PORT`).
+2. `main` resolves the port as before, then reads `RUN_DURATION_MS` and calls `RunDurationConfig.parse`.
+3. Invalid: print the standard message to stderr, exit 2. No bind, no threads.
+4. Valid, unset, or blank: `new ExecutionService(duration)` then `new DashboardServer(port, service)` then `start()`; the "running at" line is printed as before.
+5. For each `POST /api/runs`, `ExecutionService.start` records the run as In Progress and schedules completion after `runDuration.toMillis()`. `GET /api/runs/{id}` reports In Progress until the scheduled task sets `completedAtNanos`, then Passed or Failed with `durationMs` measured from run start to completion. Request/response shapes are unchanged.
+
+### Testability, including AC-23
+
+**AC-24 unit tests (`RunDurationConfigTest`, plain JUnit 5, no server, no `System.exit`):**
+
+| Group | Inputs | Expected |
+|---|---|---|
+| Default | `null`, `""`, `"   "`, tab/newline-only | 1400 ms |
+| Boundaries and strip | `"100"`, `"10000"`, `" 500 "`, `"200"`, `" 500 "` (EM SPACE) | 100, 10000, 500, 200, 500 ms |
+| Rejected | `"99"`, `"10001"`, `"0"`, `"0100"`, `"+100"`, `"-5"`, `"100.5"`, `"1e3"`, `"abc"`, `"1 000"`, `"99999999999"`, `"2147483648"`, a very long digit string, a non-ASCII digit string, `" 500"` / `"500 "` (NBSP) | `IllegalArgumentException` with exactly the standard message (assert no other exception type) |
+
+Write non-ASCII inputs with `\u` escapes. Assert the message against the **literal** text `RUN_DURATION_MS must be a whole number from 100 to 10000.`, not the `RunDurationConfig` constant, so an accidental edit of the message is caught (design-review F10). Also assert `parse(null)` equals `ExecutionService.DEFAULT_RUN_DURATION` and is 1400 ms.
+
+Parameterized tests are fine only if no new dependency is needed; the repository's existing JUnit setup should be checked at implementation time. A loop over an array within plain `@Test` methods avoids the question.
+
+**Deterministic configuration checks (`ExecutionServiceTest`, decision D1):** using the package-private `runDuration()` accessor, assert `new ExecutionService().runDuration()` equals `Duration.ofMillis(1400)` (AC-20 and the no-arg delegation) and `new ExecutionService(RunDurationConfig.parse("200")).runDuration()` equals `Duration.ofMillis(200)` (parser-to-service wiring). These involve no timing and cannot flake.
+
+**AC-23 timing smoke test with tolerance (`ExecutionServiceTest`):** construct `new ExecutionService(RunDurationConfig.parse("200"))`, call `start`, and:
+
+- assert the returned status is `In Progress` immediately (this is the deterministic In Progress check; no separate "about 50 ms later" assertion is required, and if one is kept it must be conditional on a measured elapsed time below about 150 ms);
+- poll `find(id)` every ~10 ms with a generous overall deadline (for example 3 s) rather than a single fixed `sleep`, to avoid the flakiness in the existing sleep-based tests;
+- once the status is Passed or Failed, assert `durationMs` is **at least 200** and **below 1000 ms**.
+
+The lower bound is exact and reliable: the run's start nanotime is captured before the schedule call and a `ScheduledThreadPoolExecutor` never fires early, so elapsed time is at least 200 ms and the truncated millisecond value is at least 200 (no truncation tolerance is needed). The 1000 ms upper bound leaves 800 ms of scheduler/CI jitter headroom and is clearly below the 1400 ms default, so the smoke test fails if a default-length run is observed. It is the only timing-sensitive assertion; no assertion depends on exact equality (per the requirements' tolerance note). The earlier draft's 1500 ms upper bound was above the 1400 ms default and could not distinguish the two, so it was corrected (design-review US105-F1). The test uses the service-reported duration, so it does not depend on `Thread.sleep` accuracy for correctness.
+
+**Startup behavior (two subprocess tests, decision D2; own class `StartupConfigurationTest`):** because `System.exit` lives only in `main`, AC-21 to AC-23 end to end are checked by launching the real `main` in a child JVM. No new dependency is needed. Both tests follow these conditions:
+
+- locate the classes from `DashboardServer.class.getProtectionDomain().getCodeSource()`, not a relative `target/classes`, and launch `java.home/bin/java` with `-cp` that location;
+- pass the port as an explicit argument (so `PORT` is never read) and set or remove `RUN_DURATION_MS` explicitly in `ProcessBuilder.environment()`;
+- send child output to temp files (or drain it), use `waitFor(timeout)` (about 20-30 s) and `destroyForcibly()` in a `finally`, with a JUnit `@Timeout` as a second guard, because a regression that lets the child start would never exit;
+- assert the message as a trimmed stderr line equal to the literal standard message (not whole-stream equality, since `JAVA_TOOL_OPTIONS` may add a line, and not the platform line separator).
+
+1. **Invalid value with an occupied port (AC-22 ordering).** The test opens and holds a `ServerSocket(0)`, starts the child with that port and `RUN_DURATION_MS=abc`, and asserts: exit code 2, the exact message on stderr, no `BindException` or stack trace on stderr, and no "running at" on stdout. If validation ran after the bind, the child would fail with a bind error instead, so this proves validation precedes the bind without a "find a free port, close it, reuse it" race.
+2. **Valid value, end to end (AC-21, AC-23 wiring).** The child is started with port `0` and `RUN_DURATION_MS=" 300 "`; the test reads the bound port from the "running at" stdout line (with a timeout), starts a run with `POST /api/runs`, polls `GET /api/runs/{id}` to completion, asserts the reported `durationMs` is at least 300 and below 1000 ms, then destroys the child. This also shows that the whitespace-stripped value reached `ExecutionService` through `main`.
+
+Spawning a JVM is slower and environment-sensitive. Keeping both tests in their own class means they can be isolated or dropped if CI proves unstable (the unit tests and the deterministic accessor checks stand on their own).
+
+**Manual verification (decision for design-review US105-F7):** because the README's main run path is `mvn exec:java`, which runs `main` inside the Maven JVM where `System.exit(2)` ends the Maven process, record at verification time the exit code and stderr of `RUN_DURATION_MS=abc mvn exec:java` and of `RUN_DURATION_MS=abc java -cp target/classes org.example.dashboard.DashboardServer 0`. This is an unverified assumption until then.
+
+Run `mvn test` for Java regressions. No browser-side change exists, so no browser checklist is needed. No tests have been run in this architecture phase.
+
+### Security, error handling, and boundaries
+
+- `RUN_DURATION_MS` is operator-controlled process configuration, not remote input. No HTTP request can set or change it, and no new endpoint or field exposes it.
+- Strict allow-list parsing (ASCII digits, 3-5 characters) means no exception escapes from parsing, no integer overflow, and no ambiguous numeric forms. The bounded range (100 to 10000 ms) prevents zero or negative delays and caps how long a simulated run can hold In Progress state.
+- The raw value is not echoed in the error, which avoids reflecting arbitrary environment content into logs and keeps the message fixed and testable.
+- No secrets, files, network calls, or persistence are involved. Runs remain simulated; the duration only shifts the scheduled completion time.
+- Failure is fail-fast and explicit: invalid configuration never silently becomes the default and never produces a running server.
+
+### Acceptance-criteria trace
+
+| Criterion | Architectural path |
+|---|---|
+| AC-20 | `parse` returns `DEFAULT_RUN_DURATION` (1400 ms) for `null`, empty, or whitespace-only input; `ExecutionService()` delegates to the same constant. Covered by unit tests and by the deterministic `runDuration()` accessor check on `new ExecutionService()`. |
+| AC-21 | Digits-only 3-5 char values from `100` through `10000` are accepted; `strip()` makes `" 500 "` valid as 500. Unit tests cover 100, 10000, `" 500 "`, and EM SPACE; the valid-value subprocess test covers the path through `main`. |
+| AC-22 | All other inputs hit the single rejection path in `parse`; `main` prints the exact message to stderr and calls `System.exit(2)` before `new DashboardServer` binds the port; no fallback exists. The `99999999999` case is rejected by the length check before `parseInt`. Unit tests assert the literal message and exception type; the occupied-port subprocess test asserts exit code 2, stderr, no `BindException`, and no listening, which proves the ordering. |
+| AC-23 | `main` passes the parsed `Duration` to `ExecutionService`, whose scheduler completes runs after that delay. Verified by the `runDuration()` accessor check, the timing smoke test (at least 200 and below 1000 ms), and the valid-value subprocess test. |
+| AC-24 | New `RunDurationConfigTest` covers default (unset and blank), both boundaries, strip (including EM SPACE), and the rejected set (including NBSP). |
+| AC-25 | README line beside the existing `PORT` note documents unit, default, range, failure on invalid values, a concrete example, and the stale "In Progress" caution. |
+
+### Assumptions, trade-offs, risks, and scope
+
+- **Separate parser class versus inline code in `main`:** a small package-private class adds one file but makes validation testable without `System.exit`, the environment, or a server. Inline code would need process-level tests for every rejected value. Chosen: separate class.
+- **Parser throws versus returns a result type:** an `IllegalArgumentException` with the fixed message is the simplest fit with existing conventions (the codebase already uses it for validation). A dedicated exception or result type is more explicit but adds ceremony for one caller.
+- **Manual digit scan versus `Integer.parseInt`/regex only:** the length cap makes parsing overflow-proof without relying on catching `NumberFormatException`, and avoids Unicode-digit acceptance. Slightly more code than a regex, but every rule is explicit and individually testable.
+- **`strip()` versus `trim()`:** `strip()` aligns "blank" with `isBlank()` semantics, so a Unicode-whitespace-only value uses the default. A value containing other invisible characters (for example a zero-width space) is rejected, which is the safer outcome.
+- **Exit code 2 and stderr:** a design detail within the approved "non-zero exit code"; stderr is confirmed here as the output stream.
+- **Risk, startup order:** if a future change moves validation after `new DashboardServer`, the port would already be bound. Mitigate with a code comment at the call site and the occupied-port subprocess test, which fails if the bind happens first.
+- **Risk, timing tests:** AC-23 is scheduler-based. Mitigated by deterministic accessor assertions for the configured value, polling with a deadline, an exact lower bound (never early), and an upper bound of 1000 ms that is below the 1400 ms default. The existing sleep-based tests are not changed here.
+- **Risk, subprocess tests:** depend on a launchable JVM and classes located from the code source; they carry hang/flake risk, mitigated by the timeout, `destroyForcibly`, output draining, explicit environment, and a separate test class. Drop or isolate them if CI proves flaky, and say so in the verification report.
+- **Risk, `mvn exec:java` (manual verification item):** `System.exit(2)` runs inside the Maven JVM on that path; confirm exit code and stderr manually at verification.
+- **Known limitation, existing and out of scope (decision D4):** `app.js` stores "In Progress" before a run and nothing resets it on page load, so reloading or closing the page mid-run leaves the case showing "Running...". Longer durations make this more likely. US-105 makes no UI change; the README carries a caution and a follow-up story will be raised for recovery.
+- **Residual behavior, not changed:** a malformed port still fails with the existing unhandled `NumberFormatException`, and an `ExecutionService` created by other code paths still defaults to 1400 ms.
+- **In scope:** `RunDurationConfig`, the `DEFAULT_RUN_DURATION` constant, the `runDuration()` accessor, the `main` wiring, tests (including the two subprocess tests), and the README note.
+- **Out of scope:** UI, API, report-format, per-run or per-case duration, a CLI argument or config file for duration, runtime changes, real browser automation, stale "In Progress" recovery, and new dependencies. The only requirement wording change is "stripped" instead of "trimmed" (decision D3), plus the README example and caution in AC-25.
+
+**Approval status:** Approved by user. The user approved this architecture directly in the working session; this was relayed to the design-review agent by the coordinating agent, so that agent did not receive it first-hand. Design review decisions D1-D5 (see `design-review.md`) are reflected in this section: the `runDuration()` accessor and corrected AC-23 test (D1), two subprocess startup tests (D2), `strip()` with EM SPACE and NBSP cases (D3), the README caution and follow-up story (D4).
