@@ -1,5 +1,12 @@
 # Changelog
 
+## SDLC hardening
+
+- Check each phase's output against a stage check and retry the phase up to twice before a gate opens; stop and ask the user after the last failure.
+- Label every pull request raised by `scripts/pr/raise_pr.py` as `ai-generated`; exit with code 4 if the PR exists but the label could not be applied.
+- Reword the phase skills in plainer language without changing their steps.
+- Let `/sdlc` and the SDLC Orchestrator read a story from a `.txt`, `.md` or `.docx` file through `scripts/story/read_story.py`.
+
 ## US-105 configurable run duration
 
 - Let `RUN_DURATION_MS` (100 to 10000 ms, default 1400) set the simulated test run duration at startup; an invalid value prints an error to stderr and exits with code 2 before the server binds its port.
