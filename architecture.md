@@ -20,7 +20,8 @@ flowchart LR
 | Component | Responsibility |
 |---|---|
 | `DashboardServer` | Serves the UI assets and exposes health and demo-run endpoints using the JDK HTTP server. |
-| `ExecutionService` | Creates in-progress run records, then completes them as Passed or Failed after a short scheduled delay. |
+| `ExecutionService` | Creates in-progress run records, then completes them as Passed or Failed after a short scheduled delay. (US-107) Also lists the most recent runs. |
+| `RunListQuery` | (US-107) Pure parser for the `limit` query parameter of `GET /api/runs`. |
 | `static/index.html` | Dashboard layout, login gate, test-case form, reports and confirmation dialogs. |
 | `static/app.js` | Local storage, create/read/update/delete, search/filter, runner polling, and report history. |
 | `static/styles.css` | Responsive dashboard styling and status indicators. |
@@ -167,6 +168,7 @@ The serializer is deterministic for a given ordered report projection. Verify it
 - `GET /api/health` — returns server status.
 - `POST /api/runs` — form-encoded case ID, title, and requested demo outcome; creates a run and returns its ID.
 - `GET /api/runs/{id}` — returns In Progress or the final Passed/Failed status, duration, timestamp, and failure message.
+- `GET /api/runs` — (US-107) returns the most recent runs, newest first, with an optional `limit` query parameter. See the US-107 section.
 
 ## Security and operational boundaries
 
@@ -418,3 +420,161 @@ Run `mvn test` for Java regressions. No browser-side change exists, so no browse
 - **Out of scope:** UI, API, report-format, per-run or per-case duration, a CLI argument or config file for duration, runtime changes, real browser automation, stale "In Progress" recovery, and new dependencies. The only requirement wording change is "stripped" instead of "trimmed" (decision D3), plus the README example and caution in AC-25.
 
 **Approval status:** Approved by user. The user approved this architecture directly in the working session; this was relayed to the design-review agent by the coordinating agent, so that agent did not receive it first-hand. Design review decisions D1-D5 (see `design-review.md`) are reflected in this section: the `runDuration()` accessor and corrected AC-23 test (D1), two subprocess startup tests (D2), `strip()` with EM SPACE and NBSP cases (D3), the README caution and follow-up story (D4).
+
+## US-107: List recent runs with GET /api/runs
+
+**Source and approval:** Based on the user-approved US-107 section of `requirements.md` (FR-13 to FR-16, US-107 AC-01 to AC-07), including the approved defaults for its four open questions (tie-break, empty or repeated `limit`, `limit` number formats, HEAD and OPTIONS). This is a backend-only, read-only change: no UI, no new dependency, no change to `POST /api/runs`, `GET /api/runs/{id}`, `/api/health`, static files, `PORT`, or `RUN_DURATION_MS`. Code facts below come from `DashboardServer.java`, `ExecutionService.java`, `RunDurationConfig.java`, `DashboardServerTest.java`, and `README.md`.
+
+### Current state and key constraints
+
+- `ExecutionService` keeps runs in `ConcurrentMap<String, Run> runs` (a `ConcurrentHashMap` keyed by random UUID). It exposes only `start` and `find`. `Run` is a private nested class with final `startedAt` (`Instant`, serialized as `timestamp`) and final `startedAtNanos`, plus a volatile `completedAtNanos` that the scheduler thread sets. `Run.toResult()` reads `completedAtNanos` once into a local, so each item it builds is internally consistent, and for an unfinished run it computes a live `durationMs`.
+- `DashboardServer.handle` routes `path.equals("/api/runs")` to `handleStartRun`, which rejects any non-POST with `sendMethodNotAllowed(exchange, "POST")`. That is why `GET /api/runs` returns 405 today. `/api/runs/{id}` goes to `handleGetRun`; `jsonRun(RunResult)` is the single serializer for one run, `quote` does JSON escaping, and `sendJson` adds `Cache-Control: no-store` and `Content-Type: application/json; charset=utf-8`.
+- `sendMethodNotAllowed(exchange, expected)` sets `Allow` to `expected` and builds the message "Use the {expected} method for this endpoint." Passing `"GET, POST"` would give an awkward message, so it needs a small overload (see below). `/health`, `/api/runs/{id}`, and static files keep calling the existing form unchanged.
+- The existing form parser (`parseForm`) uses `URLDecoder.decode`, which throws `IllegalArgumentException` on malformed percent escapes, and `handle` turns any `IllegalArgumentException` into a 400 that echoes the exception message. The limit parser must not rely on that path, or `limit=%zz` would return the decoder's message instead of the required exact text.
+- The store is never evicted, so a list request that scans the whole store costs time proportional to every run since startup. The response size is still bounded by the 100-run cap.
+- The server binds the wildcard address with no authentication (demo scope). Until now a run was only reachable by its unguessable UUID; listing makes recent run IDs, case IDs, and titles readable by anyone who can reach the port. The story accepts this, so the design notes it as a residual exposure rather than adding a control.
+
+```mermaid
+flowchart LR
+    Client[HTTP client] -->|GET /api/runs?limit=N| Handler[DashboardServer.handle]
+    Handler -->|path equals /api/runs| Router{Method}
+    Router -->|POST, unchanged| Start[handleStartRun]
+    Router -->|GET| List[handleListRuns]
+    Router -->|other incl. HEAD, OPTIONS, PUT, DELETE| Deny[405 + Allow: GET, POST]
+    List -->|raw query string| Query[RunListQuery.parseLimit]
+    Query -->|invalid| Bad[400 limit must be a whole number from 1 to 100.]
+    Query -->|limit 1..100, default 20| Svc[ExecutionService.listRecent]
+    Svc -->|snapshot of runs.values, sort by startedAt then sequence, newest first, take limit| Items[List of RunResult]
+    Items --> Ser[jsonRuns reusing jsonRun]
+    Ser -->|200 runs array| Client
+    Start --> Svc2[ExecutionService.start]
+```
+
+### Components and the change in each
+
+| Component | US-107 change |
+|---|---|
+| `ExecutionService` | Add `public List<RunResult> listRecent(int limit)`. Add constants `DEFAULT_LIST_LIMIT = 20` and `MAX_LIST_LIMIT = 100` (package-private). Add a per-run `sequence` (a `long` assigned from a new `AtomicLong` in `start()` and stored as a final field in `Run`). `listRecent` rejects `limit` outside 1..`MAX_LIST_LIMIT` with `IllegalArgumentException` as a defensive check (the HTTP layer already validates, so this is not the user-facing error path). Add a package-private constructor `ExecutionService(Duration, java.time.Clock)` as a test seam (design-review D1): `start` captures `startedAt` with `Instant.now(clock)`. The public no-argument constructor and the existing `ExecutionService(Duration)` constructor use `Clock.systemUTC()`, so production behavior is unchanged. `find`, scheduling, and `toResult` are otherwise unchanged. |
+| `RunListQuery` (new, package-private final class in `org.example.dashboard`) | Pure query parsing, in the style of `RunDurationConfig`: `static int parseLimit(String rawQuery)` returns the default 20 when `limit` is absent and otherwise a value in 1..100, or throws `IllegalArgumentException` carrying the constant `INVALID_LIMIT_MESSAGE = "limit must be a whole number from 1 to 100."`. It takes the raw (still percent-encoded) query so `&` and `=` are split before decoding. No HTTP types, so it is unit-testable without a server. |
+| `DashboardServer` routing | Replace the direct `/api/runs` to `handleStartRun` mapping with a small dispatcher `handleRuns`: GET calls `handleListRuns`, POST calls `handleStartRun`, anything else calls the new 405 overload with `Allow: GET, POST`. `handleStartRun` keeps its status code, body, size limit, and validation; its own POST check is removed (design-review D4/F5) because the dispatcher is its only caller and the stale `Allow: POST` text would otherwise be a second source of truth. `/api/runs/{id}`, `/api/health`, and static routing are untouched. A trailing-slash path `/api/runs/` is not `/api/runs`, so it still reaches `handleGetRun`: a GET returns 404 as today, and any other method returns 405 with `Allow: GET` from `handleGetRun` before the id check. |
+| `DashboardServer.handleListRuns` (new) | Calls `RunListQuery.parseLimit(exchange.getRequestURI().getRawQuery())` inside its own `try/catch (IllegalArgumentException)` that answers `sendJson(400, jsonError(INVALID_LIMIT_MESSAGE))`. The catch wraps only the parse, so an unrelated exception is not mislabeled as a limit error. On success it calls `executionService.listRecent(limit)` and answers `sendJson(200, jsonRuns(items))`. It never reads the request body and never calls `start`, so the store cannot change. |
+| `DashboardServer.jsonRuns` (new) | Builds `{"runs":[` + the existing `jsonRun(item)` for each item joined by `,` + `]}`. Reusing `jsonRun` guarantees the same fields, order, types, and escaping as `GET /api/runs/{id}` (FR-13). An empty list yields exactly `{"runs":[]}`. |
+| `DashboardServer.sendMethodNotAllowed` | Add an overload that takes the `Allow` value and the message separately. The `/api/runs` 405 uses `Allow: GET, POST` and the text "Use the GET or POST method for this endpoint." For HEAD requests the overload sends the headers with no body (`sendResponseHeaders(405, -1)`) and writes nothing (design-review D2/F2). The existing one-argument form and its message stay for the other endpoints, so their responses are byte-for-byte unchanged. |
+| `README.md` | Add a new "API" subsection (the README has none today; design-review D4/F4) documenting `GET /api/runs`: default 20, `limit` 1 to 100, newest first, the 400 error, and an example response (AC-07). Use a real response shape with the seven fields and at least one In Progress item. |
+| `src/test/java` | New `RunListQueryTest`; additions to `ExecutionServiceTest` and `DashboardServerTest` (see Testability). |
+
+### Interface and contract
+
+| Request | Response |
+|---|---|
+| `GET /api/runs` | 200, `{"runs":[...]}`, at most 20 items, newest first. |
+| `GET /api/runs?limit=N`, N a whole number 1 to 100 | 200, at most N items, the N newest. Fewer runs than N returns all of them. |
+| `GET /api/runs` with no runs started | 200, `{"runs":[]}`. |
+| `GET /api/runs?limit=<invalid>` | 400, exactly `{"error":"limit must be a whole number from 1 to 100."}`. |
+| `POST /api/runs` | Unchanged (202 with the run, 400 for validation errors, 413 for oversized bodies, as today). A query string on a POST is ignored. |
+| Any other method (PUT, DELETE, PATCH, HEAD, OPTIONS, ...) on `/api/runs` | 405, header `Allow: GET, POST`, JSON error body. |
+
+Success and error bodies go through `sendJson`, so they carry `Content-Type: application/json; charset=utf-8`, `Cache-Control: no-store`, and the existing `X-Content-Type-Options` and `Content-Security-Policy` headers. Each list element has the fields `id`, `caseId`, `title`, `status`, `durationMs`, `timestamp`, `failureDetails`, in the same order and types as `GET /api/runs/{id}`. A run that is still In Progress is included with its live `durationMs` and an empty `failureDetails`.
+
+### `limit` parsing rules (approved decisions 2 and 3)
+
+`RunListQuery.parseLimit(rawQuery)` applies these rules in order:
+
+1. `rawQuery` null or empty returns 20. Empty segments from `&&` or a leading or trailing `&` are skipped.
+2. Split the raw query on `&`, then each segment on the first `=`. Percent-decode the name with `URLDecoder` using UTF-8 (so `%6Cimit` is `limit`). A segment whose name cannot be decoded (malformed escape) is skipped, as if it were not `limit` (design-review D3/F3). Names are case-sensitive: `Limit` and every other name are ignored, as are other parameters. Note: at HTTP level a malformed escape in the request line is expected to be rejected by the JDK's `java.net.URI` parsing with a bare 400 before the handler runs, and `HttpClient` cannot send one, so `%zz` is covered by `RunListQueryTest` only.
+3. The first segment whose decoded name is `limit` decides the result; later `limit` segments are never examined. So `limit=5&limit=abc` returns 5 and `limit=abc&limit=5` returns 400.
+4. A `limit` segment with no `=` (`?limit`) or an empty value (`?limit=`) is invalid. Decode the value with `URLDecoder`; a malformed escape (`%zz`) is invalid and is caught inside the parser, so the decoder's own message never reaches the client. Because `URLDecoder` turns `+` into a space, `limit=+5` becomes " 5" and is rejected; `limit=%2B5` becomes "+5" and is rejected; `limit=%35` becomes "5" and is accepted. This is standard query decoding and is not treated as a defect.
+5. The decoded value must consist only of ASCII digits `'0'..'9'` (not `Character.isDigit`, which accepts other scripts). Anything else, including spaces, signs, decimals such as `2.5`, exponents, and text, is invalid.
+6. Drop leading zeros. If nothing remains (`0`, `00`) the value is 0 and invalid. If more than 3 digits remain, the value is invalid without parsing; this catches `99999999999` and any very long digit string and means no `NumberFormatException` is possible. Otherwise parse the 1 to 3 remaining digits with `Integer.parseInt` and require 1..100. So `05` returns 5 and `000000000000000000005` returns 5.
+
+Every rejection path throws the same exception with the same message, and the rejected input is not echoed in the response.
+
+### Ordering, snapshot, and concurrency
+
+`listRecent(limit)` does the following:
+
+1. Copy `runs.values()` into a local `ArrayList`. `ConcurrentHashMap` iteration is weakly consistent: it never throws `ConcurrentModificationException`, and it may or may not include a run inserted during the copy. Because `start()` does `runs.put` before `schedule`, a run can never be listed in a half-built state, and the copy reads only fully constructed `Run` objects.
+2. Sort the copy by `startedAt` descending, then by `sequence` descending (approved decision 1). Both keys are immutable fields set at construction. The sort must never use a mutable key such as `completedAtNanos`, `durationMs`, or `status`, because a key that changes during the sort can violate the comparator contract and make `List.sort` throw. `sequence` is unique, so the order is total and the result is stable and repeatable even when `Instant.now()` returns the same value for runs started in one clock tick.
+3. Take the first `limit` entries and call `toResult()` on each. Each item is read at that moment, so a run that completes during the call is shown either In Progress or completed, never a mix. Different items may be evaluated a few microseconds apart, which is acceptable for a live view.
+
+The insertion counter was chosen over `startedAtNanos` for the tie-break because it is unique (nano-time values can still collide on coarse clocks) and needs no overflow-safe subtraction. Sorting by `startedAt` first keeps list order consistent with the `timestamp` the client sees. Two runs started concurrently on different HTTP threads can obtain their `Instant` and their `sequence` in opposite orders by a few microseconds; the list then follows `timestamp`, which is the documented meaning of "newest". If the system clock is stepped backwards, `timestamp` order can differ from start order for runs on either side of the step; this is accepted for a demo and noted as a risk.
+
+Cost is O(n log n) in the number of runs held, because the store has no ordered index and runs are never evicted. A bounded selection or a `ConcurrentSkipListMap` index keyed on (`startedAt`, `sequence`) would make listing O(limit), at the price of a second structure kept in sync with `runs`. Because eviction and persistence are out of scope and the app is a single-user demo, the simple sort is chosen. Revisit it if the store is expected to grow large.
+
+The listing path holds no lock, writes nothing, and does not touch the scheduler, so it cannot delay run completion or alter the store (NFR "read-only", "safe while runs are started and completed concurrently").
+
+### Data flow
+
+1. A client sends `GET /api/runs` with an optional `limit`.
+2. `handle` matches `/api/runs` on the path (the query string is not part of `getPath()`) and dispatches by method.
+3. `handleListRuns` parses the limit from the raw query. Invalid input returns 400 immediately, before the service is touched.
+4. `ExecutionService.listRecent` snapshots, sorts, and trims the runs and converts each to a `RunResult`.
+5. `jsonRuns` serializes the items through the existing `jsonRun` and `quote`, and `sendJson` writes a 200 response. Any unexpected exception falls to the existing generic handler (500, fixed message), and an `IOException` is logged by class name only, as today.
+
+### Security, input validation, and error handling
+
+- The only input is the query string. It is parsed with an ASCII-digit allow-list and bounded to 3 significant digits before conversion, so there is no overflow, no unhandled exception, and no ambiguity between numeric forms. Unknown parameters are ignored and never reflected.
+- Output values come from the existing run store (case ID and title are already length-limited to 40 and 120 characters and validated on `start`). They are escaped by the existing `quote` function, so they cannot break the JSON, and the existing `nosniff` and CSP headers still apply.
+- The response size is capped by the 100-run limit: with titles at most 120 characters and a worst case of six-character `\uXXXX` escapes per control character, a response stays well under 200 KB. The request is a GET with no body, so the 4096-byte body limit is not relevant. The size of the query string is bounded by the JDK HTTP server's own request-line limits (not verified here; confirm during implementation or verification).
+- 400 is returned only for an invalid `limit`. 405 is returned for non-GET/POST methods on this path, with the `Allow` header required by RFC 9110. 500 comes only from the existing generic handler.
+- Residual exposure, accepted by the story and unchanged in scope: listing reveals recent run IDs, case IDs, and titles to anyone who can reach the server, whereas before a client had to know a run's UUID. The server has no authentication by design (see "Security and operational boundaries"). No new control is added; the README example should use sample data only.
+- HEAD and OPTIONS return 405 literally (approved decision 4). This means no CORS preflight support, which is consistent with a same-origin dashboard. For HEAD, the existing one-argument error helper writes a body after `sendResponseHeaders`, which the JDK server is expected to reject (logged by the existing `IOException` catch). The new 405 overload therefore sends no body for HEAD (`sendResponseHeaders(405, -1)`, no write) and leaves the one-argument helper untouched (design-review D2). A HEAD test and an OPTIONS test confirm 405, `Allow: GET, POST`, and that the request completes without a hang; the observed stderr output is recorded at verification.
+
+### Technology choices and trade-offs
+
+| Choice | Reason | Cost |
+|---|---|---|
+| Service method `listRecent` plus unique insertion counter | Total, repeatable order with no new data store; keeps ordering logic next to the data it orders. | One more `long` per run and an `AtomicLong`. |
+| Sort a snapshot instead of an ordered index | Smallest change, no second structure to keep in sync, correct under concurrent starts. | O(n log n) per request over a store that never shrinks. |
+| New `RunListQuery` class versus inline parsing in the handler | Mirrors `RunDurationConfig`; every rule is testable without a server. | One extra small file. |
+| Hand-rolled query split instead of reusing `parseForm` | `parseForm` throws decoder messages, last value wins, and treats a missing `=` as an empty value; US-107 needs first value wins, a fixed error text, and no leaks of internals. | A few lines of duplicated splitting logic. |
+| Explicit `catch` around the parse instead of relying on the generic `IllegalArgumentException` to 400 mapping | The error text is exact and cannot be replaced by an unrelated exception message. | Slightly more code in the handler. |
+| Reuse `jsonRun` for list items | One serializer, so list and single-run output cannot drift. | None. |
+| Overload for the 405 helper instead of changing its signature | Other endpoints' 405 responses stay identical. | A second small helper. |
+
+### Testability
+
+All tests use the existing JUnit 5 and `HttpClient` setup, with a short run duration (as in `DashboardServerTest`); no new dependency is needed. No tests have been run in this architecture phase.
+
+- **`RunListQueryTest` (pure):** absent or empty query returns 20; `limit=1`, `limit=100`, `limit=05`, and a long zero-padded 5 are accepted; `0`, `101`, `abc`, `2.5`, empty value, missing `=`, `+5`, `%2B5`, space (` 5` and `5%20`), `-1`, `1e1`, a non-ASCII digit, `99999999999`, `2147483648`, a very long digit string, and `%zz` each throw `IllegalArgumentException` with a message equal to the literal text `limit must be a whole number from 1 to 100.` (assert the literal, not the constant); `limit=5&limit=10` returns 5; `limit=abc&limit=5` is rejected; `limit=5&limit=abc` returns 5; unrelated parameters, `Limit=500`, and `&&` are ignored.
+- **`ExecutionServiceTest`:** with no runs, `listRecent(20)` is empty; after starting several runs, results are in reverse start order (compare against the IDs returned by `start`); a test that builds `new ExecutionService(duration, fixedClock)` with a fixed `java.time.Clock` (every run gets the same `Instant`), starts several runs, and asserts strict reverse start order, which proves the `sequence` tie-break (design-review D1); starting a large batch in a tight loop (for example 50) and requesting all of them in reverse start order is kept only as a sanity check and does not prove the tie-break, because consecutive `Instant.now()` values often differ; `limit` smaller than, equal to, and larger than the number of runs; a mix of an unfinished and a finished run, including the In Progress status; `limit` 0, 101, and negative throw `IllegalArgumentException` (defensive check); listing does not change `find` results or the run count.
+- **`DashboardServerTest` (HTTP, AC-06):** empty list body exactly `{"runs":[]}`; two runs listed newest first; each list element equals the `GET /api/runs/{id}` body for the same run when the run has completed (field names, types, and order); no `limit` returns at most 20 when 25 exist; `limit=3` returns 3; `limit=100` with more than 100 runs returns exactly 100 and the 100 newest; the invalid set `0`, `101`, `abc`, `2.5` returns 400 with the body exactly `{"error":"limit must be a whole number from 1 to 100."}`, plus the extra approved cases (empty, `+5`, `99999999999`, `05` accepted); a rejected request leaves the run count unchanged; `Content-Type` and `Cache-Control` headers on 200 and 400; PUT and DELETE return 405 with `Allow: GET, POST`, and so do HEAD and OPTIONS; `POST /api/runs` still returns 202 with the same body shape and a 400 for a bad outcome; `/api/health` and `GET /api/runs/{id}` still pass (the existing tests cover them and must stay green); a 405 on `/api/health` still has `Allow: GET`.
+- **Concurrency smoke test (optional, low flake risk):** several threads start runs while another thread repeatedly lists; assert no exception and that every response parses to at most the limit. Keep it bounded in time. It supports the NFR but is not tied to one acceptance criterion.
+- **Verification:** run `mvn test`. Record the HEAD behavior observation noted above.
+
+### Acceptance-criteria trace
+
+| Criterion | Architectural path |
+|---|---|
+| US-107 AC-01 — Newest first | `GET` dispatches to `handleListRuns`; `ExecutionService.listRecent` sorts a snapshot by `startedAt` descending then `sequence` descending; `jsonRuns` returns 200 with the `runs` array in that order. Tests: `ExecutionServiceTest` order cases; `DashboardServerTest` two-run order; `ExecutionServiceTest` fixed-clock tie-break case; each element matches `GET /api/runs/{id}` via the shared `jsonRun`. |
+| US-107 AC-02 — Empty list | An empty snapshot yields an empty `List`; `jsonRuns` emits exactly `{"runs":[]}` with status 200. Tests at service and HTTP level. |
+| US-107 AC-03 — Default and custom limit | `RunListQuery.parseLimit` returns 20 when `limit` is absent and N for a valid value; `listRecent` takes the first N after sorting, so it returns the N newest or all runs when fewer exist. Tests: 25 runs with no limit returns 20; `limit=3`; `limit=1`; `limit=100`; `limit=05`; limit larger than the run count. |
+| US-107 AC-04 — Invalid limit | `parseLimit` rejects `0`, `101`, `abc`, `2.5` (and empty, valueless, signed, spaced, malformed-escape, and overflow forms; the malformed-escape form is tested at parser level only, since the JDK handles it before the handler at HTTP level) with one exception and one message; `handleListRuns` catches it and sends 400 with the exact body from `jsonError`. The service is never called, so the store is unchanged. Tests assert the literal body. |
+| US-107 AC-05 — Methods | `handleRuns` sends POST to the unchanged `handleStartRun`, and every other method to the 405 overload with `Allow: GET, POST` (including PUT, DELETE, HEAD, OPTIONS). Tests: PUT and DELETE for the criterion, HEAD and OPTIONS for the approved decision, and a POST regression test that checks 202, the body shape, and a validation 400. |
+| US-107 AC-06 — Unit tests | The Testability section lists tests for ordering, default and custom limit, each invalid limit, the empty list, and the 405 case at the pure, service, and HTTP levels. |
+| US-107 AC-07 — README | The README change documents `GET /api/runs`, `limit`, the 400 error, and an example response whose items use the seven fields. The example must match the real output shape; a reviewer should compare it with an actual response. |
+
+| Requirement | Component |
+|---|---|
+| FR-13 List recent runs | `ExecutionService.listRecent`, `DashboardServer.handleListRuns`, `jsonRuns` reusing `jsonRun` |
+| FR-14 Limit | `RunListQuery.parseLimit` (default 20, 1..100), `listRecent(limit)` |
+| FR-15 Invalid limit | `RunListQuery.parseLimit` rejection, 400 branch in `handleListRuns` |
+| FR-16 Methods | `handleRuns` dispatcher, 405 overload |
+| NFR read-only, concurrent, bounded, deterministic | Snapshot with no writes, immutable sort keys, 100-run cap, unique sequence tie-break |
+
+### Assumptions, risks, and scope
+
+- **Risk, listing cost grows with the store:** no eviction exists, so each request scans every run since startup. Mitigation: response size stays bounded; if growth matters, add an ordered index or an eviction story (out of scope here).
+- **Risk, ordering under clock steps or concurrent starts:** `startedAt` and `sequence` are captured a few microseconds apart, and the wall clock can step. The list then follows `timestamp`, and a test that relies on wall-clock order across a step could flake. Tests use single-threaded tight loops and compare against start order.
+- **Risk, HEAD handling in the JDK server:** see Security above; unverified until a HEAD test runs.
+- **Risk, widened exposure of run data:** listing makes run IDs, case IDs, and titles discoverable without knowing a UUID. Accepted by the story; this is a demo with no authentication. If the server is ever exposed beyond localhost, an access control story is needed first.
+- **Risk, 405 message and `Allow` formatting:** `Allow: GET, POST` is a single header value, as the story specifies. The 405 text changes only for `/api/runs`.
+- **Risk, README example drifting from real output:** mitigated by checking it against an actual response at verification.
+- **Assumption, `limit` is read from the query string only:** form bodies and headers are ignored on GET. A `limit` on a POST is ignored.
+- **Assumption, trailing-slash and unknown sub-paths:** `/api/runs/` and `/api/runs/<anything>` keep their current behavior (404 via `handleGetRun`); only the exact path `/api/runs` gains GET.
+- **In scope:** `ExecutionService.listRecent` with sequence and constants, `RunListQuery`, `DashboardServer` routing and handlers, the 405 overload, tests, and the README section.
+- **Out of scope:** filtering by status or any field, pagination beyond `limit`, persistence, any UI change, eviction or capping of stored runs, changes to how runs are created, timed, or reported, and changes to `GET /api/runs/{id}`, `/api/health`, `PORT`, and `RUN_DURATION_MS`.
+
+**Approval request:** Please review the US-107 architecture. The one design choice not dictated by the approved defaults is that the tie-break uses a new insertion counter (rather than `startedAtNanos`) and that the full store is sorted per request instead of keeping an ordered index.
+
+**Status:** Architecture approved by the user (relayed by the coordinating agent). Design review is complete and decisions D1 to D4 (see `design-review.md`) are approved by the user; they are reflected in this section.

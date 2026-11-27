@@ -9,6 +9,7 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
 
@@ -79,7 +80,7 @@ public final class DashboardServer implements AutoCloseable {
             }
 
             if (path.equals("/api/runs")) {
-                handleStartRun(exchange);
+                handleRuns(exchange);
                 return;
             }
 
@@ -101,11 +102,28 @@ public final class DashboardServer implements AutoCloseable {
         }
     }
 
-    private void handleStartRun(HttpExchange exchange) throws IOException {
-        if (!methodIs(exchange, "POST")) {
-            sendMethodNotAllowed(exchange, "POST");
+    private void handleRuns(HttpExchange exchange) throws IOException {
+        if (methodIs(exchange, "GET")) {
+            handleListRuns(exchange);
+        } else if (methodIs(exchange, "POST")) {
+            handleStartRun(exchange);
+        } else {
+            sendMethodNotAllowed(exchange, "GET, POST", "Use the GET or POST method for this endpoint.");
+        }
+    }
+
+    private void handleListRuns(HttpExchange exchange) throws IOException {
+        int limit;
+        try {
+            limit = RunListQuery.parseLimit(exchange.getRequestURI().getRawQuery());
+        } catch (IllegalArgumentException error) {
+            sendJson(exchange, 400, jsonError(RunListQuery.INVALID_LIMIT_MESSAGE));
             return;
         }
+        sendJson(exchange, 200, jsonRuns(executionService.listRecent(limit)));
+    }
+
+    private void handleStartRun(HttpExchange exchange) throws IOException {
         byte[] requestBody = exchange.getRequestBody().readNBytes(MAX_REQUEST_BYTES + 1);
         if (requestBody.length > MAX_REQUEST_BYTES) {
             sendJson(exchange, 413, jsonError("Request body must be 4096 bytes or fewer."));
@@ -178,6 +196,30 @@ public final class DashboardServer implements AutoCloseable {
     private static void sendMethodNotAllowed(HttpExchange exchange, String expected) throws IOException {
         exchange.getResponseHeaders().set("Allow", expected);
         sendJson(exchange, 405, jsonError("Use the " + expected + " method for this endpoint."));
+    }
+
+    private static void sendMethodNotAllowed(HttpExchange exchange, String allow, String message)
+            throws IOException {
+        exchange.getResponseHeaders().set("Allow", allow);
+        if ("HEAD".equals(exchange.getRequestMethod())) {
+            // A HEAD response must have no body; send headers only.
+            exchange.getResponseHeaders().set("Cache-Control", "no-store");
+            exchange.getResponseHeaders().set("X-Content-Type-Options", "nosniff");
+            exchange.sendResponseHeaders(405, -1);
+            return;
+        }
+        sendJson(exchange, 405, jsonError(message));
+    }
+
+    private static String jsonRuns(List<ExecutionService.RunResult> results) {
+        StringBuilder body = new StringBuilder("{\"runs\":[");
+        for (int i = 0; i < results.size(); i++) {
+            if (i > 0) {
+                body.append(',');
+            }
+            body.append(jsonRun(results.get(i)));
+        }
+        return body.append("]}").toString();
     }
 
     private static String jsonRun(ExecutionService.RunResult result) {

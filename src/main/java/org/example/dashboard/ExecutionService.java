@@ -1,13 +1,18 @@
 package org.example.dashboard;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 public final class ExecutionService implements AutoCloseable {
     public record RunResult(
@@ -23,8 +28,12 @@ public final class ExecutionService implements AutoCloseable {
             "Simulated UI assertion failed. Review the test steps and expected result.";
 
     static final Duration DEFAULT_RUN_DURATION = Duration.ofMillis(1400);
+    static final int DEFAULT_LIST_LIMIT = 20;
+    static final int MAX_LIST_LIMIT = 100;
 
     private final Duration runDuration;
+    private final Clock clock;
+    private final AtomicLong sequenceCounter = new AtomicLong();
     private final ConcurrentMap<String, Run> runs = new ConcurrentHashMap<>();
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(task -> {
         Thread thread = new Thread(task, "demo-test-runner");
@@ -37,10 +46,16 @@ public final class ExecutionService implements AutoCloseable {
     }
 
     ExecutionService(Duration runDuration) {
+        this(runDuration, Clock.systemUTC());
+    }
+
+    // The clock is a test seam so a test can force equal start times.
+    ExecutionService(Duration runDuration, Clock clock) {
         if (runDuration.isNegative()) {
             throw new IllegalArgumentException("Run duration cannot be negative.");
         }
         this.runDuration = runDuration;
+        this.clock = clock;
     }
 
     Duration runDuration() {
@@ -55,7 +70,8 @@ public final class ExecutionService implements AutoCloseable {
         }
 
         String id = UUID.randomUUID().toString();
-        Run run = new Run(id, cleanCaseId, cleanTitle, outcome, Instant.now(), System.nanoTime());
+        Run run = new Run(id, cleanCaseId, cleanTitle, outcome, Instant.now(clock), System.nanoTime(),
+                sequenceCounter.incrementAndGet());
         runs.put(id, run);
         scheduler.schedule(() -> run.completedAtNanos = System.nanoTime(),
                 runDuration.toMillis(), TimeUnit.MILLISECONDS);
@@ -65,6 +81,23 @@ public final class ExecutionService implements AutoCloseable {
     public RunResult find(String id) {
         Run run = runs.get(id);
         return run == null ? null : run.toResult();
+    }
+
+    /** Returns up to {@code limit} runs, newest first. Read-only; safe while runs start and complete. */
+    public List<RunResult> listRecent(int limit) {
+        if (limit < 1 || limit > MAX_LIST_LIMIT) {
+            throw new IllegalArgumentException("limit must be from 1 to " + MAX_LIST_LIMIT + ".");
+        }
+        List<Run> snapshot = new ArrayList<>(runs.values());
+        // Sort only on the two immutable keys; a key that changes during the sort could break the sort.
+        snapshot.sort(Comparator.comparing((Run run) -> run.startedAt)
+                .thenComparingLong(run -> run.sequence)
+                .reversed());
+        List<RunResult> results = new ArrayList<>(Math.min(limit, snapshot.size()));
+        for (Run run : snapshot.subList(0, Math.min(limit, snapshot.size()))) {
+            results.add(run.toResult());
+        }
+        return results;
     }
 
     private static String requireText(String value, String label, int maxLength) {
@@ -90,15 +123,18 @@ public final class ExecutionService implements AutoCloseable {
         private final String outcome;
         private final Instant startedAt;
         private final long startedAtNanos;
+        private final long sequence;
         private volatile long completedAtNanos;
 
-        private Run(String id, String caseId, String title, String outcome, Instant startedAt, long startedAtNanos) {
+        private Run(String id, String caseId, String title, String outcome, Instant startedAt, long startedAtNanos,
+                    long sequence) {
             this.id = id;
             this.caseId = caseId;
             this.title = title;
             this.outcome = outcome;
             this.startedAt = startedAt;
             this.startedAtNanos = startedAtNanos;
+            this.sequence = sequence;
         }
 
         private RunResult toResult() {
