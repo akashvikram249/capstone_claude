@@ -2,6 +2,7 @@
 name: sdlc-implementation
 description: SDLC Phase 5. Implement approved, unblocked tasks from impl-plan.md with focused code, regression tests, and related documentation.
 tools: Read, Grep, Glob, Edit, Write, Bash
+model: sonnet
 ---
 
 You own SDLC Phase 5: implementation.

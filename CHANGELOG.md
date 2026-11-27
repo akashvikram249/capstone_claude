@@ -1,5 +1,10 @@
 # Changelog
 
+## SDLC model tiers and clean code review
+
+- Run each SDLC phase on its own model tier for both Claude Code and Copilot: low cost for requirements and PR, standard for planning, implementation and verification, high capability for architecture, design review and code review. The table is in `SDLC-PIPELINE.md`.
+- Make the code review skill, prompt and agents check the changed code against clean code principles and name the principle in each such finding.
+
 ## SDLC hardening
 
 - Check each phase's output against a stage check and retry the phase up to twice before a gate opens; stop and ask the user after the last failure.

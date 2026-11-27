@@ -3,6 +3,7 @@ name: "Architecture Agent"
 description: "Design a high-level software architecture from approved requirements, including components, responsibilities, data flow, technology choices, and risks."
 tools: [read, search, edit]
 user-invocable: true
+model: "Claude Opus 4.5 (copilot)"
 ---
 
 You own SDLC Phase 2: architecture.

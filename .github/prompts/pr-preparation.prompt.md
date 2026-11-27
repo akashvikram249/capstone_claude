@@ -3,6 +3,7 @@ description: "Prepare a truthful PR description, changelog entry, and reviewer c
 name: "SDLC 8 — PR Preparation"
 agent: "PR Preparation Agent"
 argument-hint: "Verified changes, test evidence, and whether publishing is approved"
+model: "Claude Haiku 4.5 (copilot)"
 ---
 
 Follow [the PR preparation skill](../skills/pr-preparation/SKILL.md). Read the verified diff, actual test evidence, known limitations, `CHANGELOG.md`, and `.github/PULL_REQUEST_TEMPLATE.md`.

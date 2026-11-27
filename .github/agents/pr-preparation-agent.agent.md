@@ -3,6 +3,7 @@ name: "PR Preparation Agent"
 description: "Prepare the PR description and changelog from verified changes, then commit, push, and raise the pull request once the human has approved publishing."
 tools: [read, search, edit, execute]
 user-invocable: true
+model: "Claude Haiku 4.5 (copilot)"
 ---
 
 You own SDLC Phase 8: PR preparation and publishing.

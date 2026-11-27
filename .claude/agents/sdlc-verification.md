@@ -2,6 +2,7 @@
 name: sdlc-verification
 description: SDLC Phase 7. Run tests and checks, verify each acceptance criterion with concrete evidence, and report remaining gaps without changing product code.
 tools: Read, Grep, Glob, Bash
+model: sonnet
 ---
 
 You own SDLC Phase 7: verification.

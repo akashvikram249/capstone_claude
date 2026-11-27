@@ -3,6 +3,7 @@ name: "Verification Agent"
 description: "Run approved tests and quality checks, verify acceptance criteria and generated deliverables, and report reproducible evidence and remaining gaps."
 tools: [read, search, execute]
 user-invocable: true
+model: "Claude Sonnet 4.5 (copilot)"
 ---
 
 You own SDLC Phase 7: verification.

@@ -3,6 +3,7 @@ name: "Requirements Agent"
 description: "Clarify a user story and produce functional requirements, non-functional requirements, assumptions, and testable acceptance criteria."
 tools: [read, search, edit]
 user-invocable: true
+model: "Claude Haiku 4.5 (copilot)"
 ---
 
 You own SDLC Phase 1: requirements.

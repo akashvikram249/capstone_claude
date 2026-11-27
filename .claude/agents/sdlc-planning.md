@@ -2,6 +2,7 @@
 name: sdlc-planning
 description: SDLC Phase 4. Turn the approved architecture into a prioritized, dependency-ordered implementation plan with tests and blockers in impl-plan.md.
 tools: Read, Grep, Glob, Edit, Write
+model: sonnet
 ---
 
 You own SDLC Phase 4: implementation planning.
