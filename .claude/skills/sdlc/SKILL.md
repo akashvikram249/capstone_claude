@@ -13,7 +13,7 @@ $ARGUMENTS
 
 If the text above is a single path to an existing file (`.txt`, `.md` or `.docx`, for example `stories/US-107.docx`), do not treat the path as the story. Run `python3 scripts/story/read_story.py <path>` and use its output as the story text. Tell the user the file you read and show the first lines so they can catch a bad conversion. Record the story source as that file path in `requirements.md`, never as Jira or any source you did not open. If the script fails (missing file, unsupported type such as `.pdf` or `.doc`), report its exact message and stop. If the story has no story ID (such as `US-107`), ask for one before Phase 1, because the branch, PR title and CHANGELOG all use it.
 
-Read `SDLC-PIPELINE.md` for the phases, artifacts, gates and the stage checks used below. Hand each phase to its subagent with the Agent tool; don't do their work yourself. Subagents can't talk to the user, so give each one the story text, the story ID and the decisions approved so far, and pass their questions and results to the user with AskUserQuestion at each gate.
+Read `SDLC-PIPELINE.md` for the phases, artifacts, gates and the stage checks used below. Hand each phase to its subagent with the Agent tool; don't do their work yourself. Don't pass a `model` argument: each subagent's own `model:` line sets its tier (see "Model per stage" in `SDLC-PIPELINE.md`). Subagents can't talk to the user, so give each one the story text, the story ID and the decisions approved so far, and pass their questions and results to the user with AskUserQuestion at each gate.
 
 ## Preflight
 

@@ -2,6 +2,7 @@
 name: sdlc-pr
 description: SDLC Phase 8. Prepare the PR description and changelog from verified work, then raise the pull request through scripts/pr/raise_pr.py once publishing is approved.
 tools: Read, Grep, Glob, Edit, Write, Bash
+model: haiku
 ---
 
 You own SDLC Phase 8: PR preparation and publishing.

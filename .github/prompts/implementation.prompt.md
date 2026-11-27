@@ -3,6 +3,7 @@ description: "Implement an approved and unblocked task from the implementation p
 name: "SDLC 5 — Implementation"
 agent: "Implementation Agent"
 argument-hint: "Approved task ID or task description"
+model: "Claude Sonnet 4.5 (copilot)"
 ---
 
 Follow [the implementation skill](../skills/implementation/SKILL.md). Read approved `requirements.md`, `architecture.md`, `design-review.md`, and `impl-plan.md`.

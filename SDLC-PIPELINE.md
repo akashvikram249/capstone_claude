@@ -55,6 +55,28 @@ Every phase has three matching files:
 
 The agent defines the role and boundaries; the prompt is a reusable task starter; the skill defines the repeatable step-by-step workflow. Specialists link to their matching prompt and skill so that using a phase agent includes both.
 
+## Model per stage
+
+Each stage runs on the cheapest model that does its job well, so the pipeline changes model as it moves from phase to phase. Cheap, well-bounded work (turning a story into a list, running a script) uses a low-cost model. Work where a miss is expensive later (design and review) uses the strongest model.
+
+| # | Phase | Tier | Claude Code (`model:`) | Copilot (`model:`) |
+|---:|---|---|---|---|
+| 1 | Requirements | Low cost | `haiku` | Claude Haiku 4.5 (copilot) |
+| 2 | Architecture | High capability | `opus` | Claude Opus 4.5 (copilot) |
+| 3 | Design review | High capability | `opus` | Claude Opus 4.5 (copilot) |
+| 4 | Planning | Standard | `sonnet` | Claude Sonnet 4.5 (copilot) |
+| 5 | Implementation | Standard | `sonnet` | Claude Sonnet 4.5 (copilot) |
+| 6 | Code review | High capability | `opus` | Claude Opus 4.5 (copilot) |
+| 7 | Verification | Standard | `sonnet` | Claude Sonnet 4.5 (copilot) |
+| 8 | PR | Low cost | `haiku` | Claude Haiku 4.5 (copilot) |
+
+Where it is set:
+
+- **Claude Code:** the `model:` line in `.claude/agents/sdlc-*.md`. The `/sdlc` skill doesn't pass a `model` of its own when it calls a subagent, so this line is the one that applies.
+- **Copilot:** the `model:` line in `.github/agents/*-agent.agent.md` and in the matching `.github/prompts/*.prompt.md`. Keep the two equal, because a prompt's model overrides the agent's. The SDLC Orchestrator has no `model:` line, so it runs on whatever you picked in the model picker, and each specialist it calls switches to its own.
+
+To change a tier, edit the table above and the `model:` lines for that phase in both places. Copilot names must match what your model picker shows; if a name isn't available to your account, Copilot falls back to the picker's current model.
+
 ## Retry after every stage
 
 The orchestrator (the Copilot agent or the Claude `/sdlc` skill) checks each phase's output before it shows it to you or opens a gate:

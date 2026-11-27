@@ -3,6 +3,7 @@ description: "Create a prioritized and dependency-ordered implementation plan fr
 name: "SDLC 4 — Implementation Plan"
 agent: "Planning Agent"
 argument-hint: "Approved architecture and design review"
+model: "Claude Sonnet 4.5 (copilot)"
 ---
 
 Follow [the planning skill](../skills/planning/SKILL.md). Read approved requirements, architecture, design review, and repository conventions.

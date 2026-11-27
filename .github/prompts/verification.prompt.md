@@ -3,6 +3,7 @@ description: "Run tests and verify acceptance criteria and generated deliverable
 name: "SDLC 7 — Verification"
 agent: "Verification Agent"
 argument-hint: "Acceptance criteria and changed deliverables"
+model: "Claude Sonnet 4.5 (copilot)"
 ---
 
 Follow [the verification skill](../skills/verification/SKILL.md). Read requirements, changed files, and review findings.

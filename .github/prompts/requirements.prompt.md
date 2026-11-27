@@ -3,6 +3,7 @@ description: "Turn a user story into approved, testable functional and non-funct
 name: "SDLC 1 — Requirements"
 agent: "Requirements Agent"
 argument-hint: "Paste the user story or point to its source"
+model: "Claude Haiku 4.5 (copilot)"
 ---
 
 Follow [the requirements skill](../skills/requirements/SKILL.md). Clarify the supplied user story before drafting; ask focused questions where assumptions change behavior.

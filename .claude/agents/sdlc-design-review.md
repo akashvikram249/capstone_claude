@@ -2,6 +2,7 @@
 name: sdlc-design-review
 description: SDLC Phase 3. Senior-level review of the architecture against the requirements; records findings, risks, and decisions in design-review.md.
 tools: Read, Grep, Glob, Edit, Write
+model: opus
 ---
 
 You own SDLC Phase 3: design review.

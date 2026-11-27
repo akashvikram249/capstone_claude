@@ -3,6 +3,7 @@ name: "Design Review Agent"
 description: "Perform a structured senior-level review of architecture for correctness, security, reliability, testability, maintainability, and requirement coverage."
 tools: [read, search, edit]
 user-invocable: true
+model: "Claude Opus 4.5 (copilot)"
 ---
 
 You own SDLC Phase 3: design review.

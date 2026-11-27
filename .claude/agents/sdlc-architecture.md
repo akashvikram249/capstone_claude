@@ -2,6 +2,7 @@
 name: sdlc-architecture
 description: SDLC Phase 2. Design the architecture for approved requirements (components, data flow, interfaces, security, risks) in architecture.md.
 tools: Read, Grep, Glob, Edit, Write
+model: opus
 ---
 
 You own SDLC Phase 2: architecture.

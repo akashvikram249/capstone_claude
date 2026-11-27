@@ -3,6 +3,7 @@ description: "Review architecture against requirements before production impleme
 name: "SDLC 3 — Design Review"
 agent: "Design Review Agent"
 argument-hint: "Architecture and requirements files to review"
+model: "Claude Opus 4.5 (copilot)"
 ---
 
 Follow [the design-review skill](../skills/design-review/SKILL.md). Review `architecture.md` against approved `requirements.md` as a senior reviewer.

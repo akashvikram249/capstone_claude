@@ -3,6 +3,7 @@ name: "Implementation Agent"
 description: "Implement an approved, scoped SDLC task from the plan with focused code changes, regression tests, and directly related documentation."
 tools: [read, search, edit, execute]
 user-invocable: true
+model: "Claude Sonnet 4.5 (copilot)"
 ---
 
 You own SDLC Phase 5: implementation.

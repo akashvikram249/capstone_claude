@@ -2,6 +2,7 @@
 name: sdlc-requirements
 description: SDLC Phase 1. Clarify a user story into functional and non-functional requirements, assumptions, and testable acceptance criteria in requirements.md.
 tools: Read, Grep, Glob, Edit, Write
+model: haiku
 ---
 
 You own SDLC Phase 1: requirements.
