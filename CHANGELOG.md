@@ -1,5 +1,10 @@
 # Changelog
 
+## US-107 list recent runs
+
+- Add `GET /api/runs` to list the most recent runs newest first, with an optional `limit` (1 to 100, default 20); an invalid `limit` returns 400 with `{"error":"limit must be a whole number from 1 to 100."}`.
+- Return 405 with `Allow: GET, POST` for methods other than GET and POST on `/api/runs`; `POST /api/runs` is unchanged.
+
 ## SDLC hardening
 
 - Check each phase's output against a stage check and retry the phase up to twice before a gate opens; stop and ask the user after the last failure.

@@ -39,6 +39,29 @@ Set the simulated test run duration with the `RUN_DURATION_MS` environment varia
 
 Caution: if you reload or close the page while a run is in progress, that case keeps showing "In Progress" and its Run button stays disabled. This is a known limitation, and longer durations make it easier to hit.
 
+## API
+
+### GET /api/runs
+
+Lists the most recent test runs, newest first (by start time), including runs that are still In Progress. Each item has the same fields as `GET /api/runs/{id}`.
+
+- Without `limit`, at most 20 runs are returned. `limit` takes a whole number from 1 to 100 and returns at most that many of the newest runs, for example `GET /api/runs?limit=5`. Leading zeros are accepted (`limit=05` is 5). If `limit` is repeated, the first one is used, and other query parameters are ignored.
+- Any other `limit` (for example `0`, `101`, `abc`, `2.5`, an empty value, or a signed number) returns 400 with `{"error":"limit must be a whole number from 1 to 100."}`.
+- With no runs yet, the response is `{"runs":[]}`.
+- `POST /api/runs` starts a run as before. Any other method on `/api/runs` (including HEAD and OPTIONS) returns 405 with `Allow: GET, POST`.
+- Runs are kept in memory, so the list holds only runs started since the server process started.
+- The server has no authentication. This endpoint lists run IDs, case IDs, and titles to anyone who can reach the port.
+
+Example response (compact JSON, shown here with one run per line; the IDs are samples):
+
+```json
+{"runs":[
+{"id":"f713132a-0000-4000-8000-000000000003","caseId":"TC-103","title":"Update profile photo","status":"In Progress","durationMs":30,"timestamp":"2026-11-27T07:06:54.882561Z","failureDetails":""},
+{"id":"f4692c4c-0000-4000-8000-000000000002","caseId":"TC-102","title":"Checkout with saved card","status":"Failed","durationMs":101,"timestamp":"2026-11-27T07:06:54.338939Z","failureDetails":"Simulated UI assertion failed. Review the test steps and expected result."},
+{"id":"b530dddf-0000-4000-8000-000000000001","caseId":"TC-101","title":"Sign in with valid credentials","status":"Passed","durationMs":106,"timestamp":"2026-11-27T07:06:54.315159Z","failureDetails":""}
+]}
+```
+
 ## Test
 
 ```sh

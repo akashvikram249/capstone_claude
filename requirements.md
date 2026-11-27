@@ -298,3 +298,98 @@ None. The three earlier questions (surrounding whitespace, `+100`/`0100`, and va
 ### Requirements-phase status
 
 Approved by user. The user approved the requirements directly in the working session; this was relayed to the requirements and design-review agents by the coordinating agent (design-review decision D5), so those agents did not receive it first-hand. The design review decisions D1-D5 (see `design-review.md`) are reflected above: Unicode-whitespace stripping instead of "trimmed", and the README example and stale-state caution in AC-25. No open questions remain.
+
+## US-107: List recent runs with GET /api/runs
+
+### User story
+
+As a QA engineer, I want to list the most recent test runs from the API, so that I can see what has run without already knowing each run ID.
+
+**Source:** Story text supplied in the /sdlc command. No Jira, MCP, Confluence, or other external source was supplied or accessed.
+
+### Facts from the story and confirmed decisions
+
+- `GET /api/runs` returns 200 with `{"runs":[...]}`, newest first. Each item has the same fields as `GET /api/runs/{id}`.
+- At most 20 runs are returned by default. An optional `limit` query parameter accepts whole numbers from 1 to 100.
+- A `limit` that is not a whole number from 1 to 100 returns 400 with `{"error":"limit must be a whole number from 1 to 100."}`.
+- With no runs yet, the response is 200 with `{"runs":[]}`.
+- `POST /api/runs` keeps its current behavior. Methods other than GET and POST on `/api/runs` return 405 with `Allow: GET, POST`.
+- No open questions were raised by the story; the decisions above were confirmed by the user.
+
+### Current behavior (from code inspection)
+
+- `ExecutionService` keeps runs in an in-memory `ConcurrentHashMap` keyed by random UUID. It has no ordered view or list method, only `start` and `find`. Each run records `startedAt` (an `Instant`, serialized as the `timestamp` field) and a monotonic `startedAtNanos`.
+- `GET /api/runs/{id}` returns `id`, `caseId`, `title`, `status`, `durationMs`, `timestamp`, and `failureDetails`. For a run still in progress, `durationMs` is the live elapsed time.
+- `DashboardServer` routes `/api/runs` straight to the POST handler. Today any non-POST method on `/api/runs` returns 405 with `Allow: POST` and the message "Use the POST method for this endpoint." (so GET currently returns 405).
+- Runs are never evicted, so the store grows for the life of the server process.
+
+### Functional requirements
+
+#### FR-13: List recent runs
+
+`GET /api/runs` returns 200 with a JSON object `{"runs":[...]}`. Runs are ordered newest first by start time. Each element has exactly the fields returned by `GET /api/runs/{id}` (`id`, `caseId`, `title`, `status`, `durationMs`, `timestamp`, `failureDetails`), including runs that are still In Progress. With no runs, the array is empty (`{"runs":[]}`).
+
+#### FR-14: Limit the number of runs returned
+
+Without `limit`, at most 20 runs are returned. With a valid `limit=N` (whole number from 1 to 100), at most N runs are returned, being the N newest. If fewer runs exist than the limit, all of them are returned.
+
+#### FR-15: Reject an invalid limit
+
+A `limit` value that is not a whole number from 1 to 100 (for example `0`, `101`, `abc`, `2.5`) returns 400 with the body `{"error":"limit must be a whole number from 1 to 100."}`. The run store is not changed.
+
+#### FR-16: Method handling on /api/runs
+
+`POST /api/runs` keeps its current behavior (status code, response body, and validation). Methods other than GET and POST on `/api/runs` return 405 with the header `Allow: GET, POST`. The 405 JSON error text may change to mention both methods. Other endpoints (`/api/health`, `/api/runs/{id}`, static files) are unchanged.
+
+### Non-functional requirements
+
+- Backend only: no UI change, no new dependencies, Java 17 and Maven only.
+- Listing is read-only and must not start, modify, or remove runs.
+- Listing must be safe while runs are being started and completed concurrently, and must not throw or return a partly built list.
+- The response must use the same JSON conventions as the existing endpoints (UTF-8, `Content-Type: application/json; charset=utf-8`, `Cache-Control: no-store`, string escaping).
+- Response size is bounded by the 100-run maximum regardless of how many runs the store holds.
+- Ordering must be deterministic for runs with distinct start times.
+
+### Acceptance criteria
+
+The story's criteria are numbered AC-01 to AC-07. Those numbers are already used by earlier stories in this file, so this section's IDs carry a prefix (`US-107 AC-nn`) to stay unique. The numbering and wording are otherwise as supplied.
+
+- **US-107 AC-01 — Newest first:** `GET /api/runs` returns 200 and a `runs` array ordered newest first. (FR-13)
+- **US-107 AC-02 — Empty list:** With no runs, `GET /api/runs` returns `{"runs":[]}`. (FR-13)
+- **US-107 AC-03 — Default and custom limit:** Without `limit`, at most 20 runs are returned; with `limit=N`, at most N are returned. (FR-14)
+- **US-107 AC-04 — Invalid limit:** `limit=0`, `limit=101`, `limit=abc`, and `limit=2.5` each return 400 with `{"error":"limit must be a whole number from 1 to 100."}` exactly. (FR-15)
+- **US-107 AC-05 — Methods:** `POST /api/runs` still starts a run exactly as before, and PUT or DELETE on `/api/runs` returns 405 with `Allow: GET, POST`. (FR-16)
+- **US-107 AC-06 — Unit tests:** Unit tests cover ordering, the default and custom limit, each invalid limit, the empty list, and the 405 case. (all FRs)
+- **US-107 AC-07 — README:** `README.md` documents `GET /api/runs` with an example response. (FR-13, FR-14)
+
+### Assumptions
+
+- "Newest" means most recently started, using each run's start time. The store is unordered today, so ordering is applied when listing.
+- Each list item has the same JSON field names and types as `GET /api/runs/{id}`; the same serialization is reused.
+- Runs still In Progress are included, with their live `durationMs`.
+- Boundary values `limit=1` and `limit=100` are valid. Valid means digits only; `limit=2.5`, `limit=abc`, `limit=0`, and `limit=101` are the invalid examples given.
+- The 400 error uses the existing error JSON shape (`{"error":"..."}`) and the existing JSON response headers.
+- Run data lives only in memory, so the list holds only runs started since the server process started (persistence is out of scope).
+- The `limit` parameter is read from the request query string only, and unrelated query parameters are ignored.
+
+### Open questions
+
+These gaps are not settled by the confirmed decisions. Proposed defaults are shown so the story can proceed if they are accepted.
+
+1. **Tie-break for equal start times.** `Instant.now()` can return the same value for runs started in the same clock tick, and the store has no sequence number. Proposed: break ties by the monotonic start time (`startedAtNanos`) or an insertion counter so the newest-first order is stable. Needs a decision only if "deterministic for ties" must be tested.
+2. **Repeated or empty `limit`.** Behavior for `limit=` (empty), `limit` with no value, and `limit=5&limit=10` is not stated. Proposed: an empty or valueless `limit` is invalid and returns 400; for repeated `limit`, the first value is used (or reject with 400).
+3. **Number formats for `limit`.** Behavior for `+5`, `05`, ` 5` (surrounding space), and very large values such as `99999999999` is not stated. Proposed: digits only, so `+5` and ` 5` are rejected with 400; leading zeros such as `05` and very large values are handled without an unhandled exception (large values return the same 400). This is consistent with US-105's `RUN_DURATION_MS` rules.
+4. **HEAD and OPTIONS.** "Methods other than GET and POST" returns 405 literally, which includes HEAD and OPTIONS. Proposed: follow the story literally.
+
+### Out of scope
+
+- Filtering by status (or by any other field).
+- Pagination beyond `limit` (no offset, cursor, or page number).
+- Persistence across restarts.
+- Any UI change, including showing the run list in the dashboard.
+- Evicting or capping stored runs, or changing how runs are created, timed, or reported.
+- Changes to `GET /api/runs/{id}`, `/api/health`, `PORT`, or `RUN_DURATION_MS` handling.
+
+### Requirements-phase status
+
+Approved by user. The user approved this section together with the proposed defaults for the four open questions above: (1) ties on equal start time are broken by the monotonic start time or an insertion counter; (2) an empty or valueless `limit` returns 400, and with a repeated `limit` the first value is used; (3) `limit` is digits only, so `+5`, ` 5`, and very large values such as `99999999999` return the same 400 with no unhandled exception, while leading zeros such as `05` are accepted as 5; (4) HEAD and OPTIONS on `/api/runs` return 405 with `Allow: GET, POST`. The requirement text above is otherwise unchanged.
